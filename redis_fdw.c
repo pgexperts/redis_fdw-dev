@@ -44,9 +44,13 @@
 #include "miscadmin.h"
 #include "mb/pg_wchar.h"
 #include "optimizer/cost.h"
+#include "optimizer/pathnode.h"
+#include "optimizer/planmain.h"
+#include "optimizer/restrictinfo.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/rel.h"
 
 PG_MODULE_MAGIC;
 
@@ -78,6 +82,14 @@ static struct RedisFdwOption valid_options[] =
 	{ NULL,			InvalidOid }
 };
 
+typedef struct
+{
+	char   *svr_address;
+	int		svr_port;
+	char   *svr_password;
+	int 	svr_database;
+} RedisFdwPlanState;
+
 /*
  * FDW-specific information for ForeignScanState.fdw_state.
  */
@@ -106,7 +118,18 @@ PG_FUNCTION_INFO_V1(redis_fdw_validator);
 /*
  * FDW callback routines
  */
-static FdwPlan *redisPlanForeignScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *baserel);
+static void redisGetForeignRelSize(PlannerInfo *root,
+                                 RelOptInfo *baserel,
+                                 Oid foreigntableid);
+static void redisGetForeignPaths(PlannerInfo *root,
+                               RelOptInfo *baserel,
+                               Oid foreigntableid);
+static ForeignScan *redisGetForeignPlan(PlannerInfo *root,
+                                      RelOptInfo *baserel,
+                                      Oid foreigntableid,
+                                      ForeignPath *best_path,
+                                      List *tlist,
+                                      List *scan_clauses);
 static void redisExplainForeignScan(ForeignScanState *node, ExplainState *es);
 static void redisBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *redisIterateForeignScan(ForeignScanState *node);
@@ -133,7 +156,11 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
 	elog(NOTICE, "redis_fdw_handler");
 #endif
 
-	fdwroutine->PlanForeignScan = redisPlanForeignScan;
+	fdwroutine->GetForeignRelSize = redisGetForeignRelSize;
+	fdwroutine->GetForeignPaths = redisGetForeignPaths;
+	fdwroutine->GetForeignPlan = redisGetForeignPlan;
+	/* can't ANALYSE redis */
+	fdwroutine->AnalyzeForeignTable = NULL;  
 	fdwroutine->ExplainForeignScan = redisExplainForeignScan;
 	fdwroutine->BeginForeignScan = redisBeginForeignScan;
 	fdwroutine->IterateForeignScan = redisIterateForeignScan;
@@ -320,14 +347,14 @@ redisGetOptions(Oid foreigntableid, char **address, int *port, char **password, 
 		*database = 0;
 }
 
-/*
- * redisPlanForeignScan
- *		Create a FdwPlan for a scan on the foreign table
- */
-static FdwPlan *
-redisPlanForeignScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *baserel)
+
+static void 
+redisGetForeignRelSize(PlannerInfo *root,
+					   RelOptInfo *baserel,
+					   Oid foreigntableid)
 {
-	FdwPlan		*fdwplan;
+    RedisFdwPlanState *fdw_private;
+
 	char		*svr_address = NULL;
 	int		svr_port = 0;
 	char		*svr_password = NULL;
@@ -337,11 +364,21 @@ redisPlanForeignScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *baserel)
 	struct timeval  timeout = {1, 500000};
 
 #ifdef DEBUG
-	elog(NOTICE, "redisPlanForeignScan");
+	elog(NOTICE, "redisGetForeignRelSize");
 #endif
 
-	/* Fetch options  */
+    /*
+     * Fetch options. Get everything so we don't need to 
+	 * re-fetch it later in planning.
+     */
+    fdw_private = (RedisFdwPlanState *) palloc(sizeof(RedisFdwPlanState));
+    baserel->fdw_private = (void *) fdw_private;
+
 	redisGetOptions(foreigntableid, &svr_address, &svr_port, &svr_password, &svr_database);
+	fdw_private->svr_address = svr_address;
+	fdw_private->svr_password = svr_password;
+	fdw_private->svr_port = svr_port;
+	fdw_private->svr_database = svr_database;
 
 	/* Connect to the database */
 	context = redisConnectWithTimeout(svr_address, svr_port, timeout);
@@ -393,25 +430,85 @@ redisPlanForeignScan(Oid foreigntableid, PlannerInfo *root, RelOptInfo *baserel)
 			));
 	}
 
-	/*
-	 * Construct FdwPlan with cost estimates.
-	 */
-	fdwplan = makeNode(FdwPlan);
-
-	/* Local databases are probably faster */
-	if (strcmp(svr_address, "127.0.0.1") == 0 || strcmp(svr_address, "localhost") == 0)
-		fdwplan->startup_cost = 10;
-	else
-		fdwplan->startup_cost = 25;
-
 	baserel->rows = reply->integer;
-	fdwplan->total_cost = reply->integer + fdwplan->startup_cost;
-	fdwplan->fdw_private = NIL;	/* not used */
 
 	freeReplyObject(reply);
 	redisFree(context);
 
-	return fdwplan;
+	
+}
+
+/*
+ * redisGetForeignPaths
+ *      Create possible access paths for a scan on the foreign table
+ *
+ *      Currently we don't support any push-down feature, so there is only one
+ *      possible access path, which simply returns all records in redis.
+ */
+static void 
+redisGetForeignPaths(PlannerInfo *root,
+					 RelOptInfo *baserel,
+					 Oid foreigntableid)
+{
+
+    RedisFdwPlanState *fdw_private = baserel->fdw_private;
+
+	Cost        startup_cost, total_cost;
+
+#ifdef DEBUG
+	elog(NOTICE, "redisGetForeignPaths");
+#endif
+
+	if (strcmp(fdw_private->svr_address, "127.0.0.1") == 0 || 
+		strcmp(fdw_private->svr_address, "localhost") == 0)
+		startup_cost = 10;
+	else
+		startup_cost = 25;
+
+	total_cost = startup_cost + baserel->rows;
+
+
+    /* Create a ForeignPath node and add it as only possible path */
+    add_path(baserel, (Path *)
+             create_foreignscan_path(root, baserel,
+                                     baserel->rows,
+                                     startup_cost,
+                                     total_cost,
+                                     NIL,       /* no pathkeys */
+                                     NULL,      /* no outer rel either */
+                                     NIL));     /* no fdw_private data */
+	
+}
+
+static ForeignScan *
+redisGetForeignPlan(PlannerInfo *root,
+					RelOptInfo *baserel,
+					Oid foreigntableid,
+					ForeignPath *best_path,
+					List *tlist,
+					List *scan_clauses)
+{
+    Index       scan_relid = baserel->relid;
+
+#ifdef DEBUG
+	elog(NOTICE, "redisGetForeignPlan");
+#endif
+
+    /*
+     * We have no native ability to evaluate restriction clauses, so we just
+     * put all the scan_clauses into the plan node's qual list for the
+     * executor to check.  So all we have to do here is strip RestrictInfo
+     * nodes from the clauses and ignore pseudoconstants (which will be
+     * handled elsewhere).
+     */
+    scan_clauses = extract_actual_clauses(scan_clauses, false);
+
+    /* Create the ForeignScan node */
+    return make_foreignscan(tlist,
+                            scan_clauses,
+                            scan_relid,
+                            NIL,    /* no expressions to evaluate */
+                            NIL);       /* no private state either */
 }
 
 /*
