@@ -19,6 +19,12 @@
 
 #include "postgres.h"
 
+/* check that we are compiling for the right postgres version */
+#if PG_VERSION_NUM >= 90200
+#error wrong Postgresql version this branch is only for 9.1
+#endif
+
+
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
