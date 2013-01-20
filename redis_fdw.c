@@ -61,8 +61,8 @@ PG_MODULE_MAGIC;
  */
 struct RedisFdwOption
 {
-	const char	*optname;
-	Oid		optcontext;	/* Oid of catalog in which option may appear */
+	const char *optname;
+	Oid			optcontext;		/* Oid of catalog in which option may appear */
 };
 
 /*
@@ -73,22 +73,22 @@ static struct RedisFdwOption valid_options[] =
 {
 
 	/* Connection options */
-	{ "address",		ForeignServerRelationId },
-	{ "port",		ForeignServerRelationId },
-	{ "password",		UserMappingRelationId },
-	{ "database",		ForeignTableRelationId },
+	{"address", ForeignServerRelationId},
+	{"port", ForeignServerRelationId},
+	{"password", UserMappingRelationId},
+	{"database", ForeignTableRelationId},
 
 	/* Sentinel */
-	{ NULL,			InvalidOid }
+	{NULL, InvalidOid}
 };
 
 typedef struct
 {
-	char   *svr_address;
-	int		svr_port;
-	char   *svr_password;
-	int 	svr_database;
-} RedisFdwPlanState;
+	char	   *svr_address;
+	int			svr_port;
+	char	   *svr_password;
+	int			svr_database;
+}	RedisFdwPlanState;
 
 /*
  * FDW-specific information for ForeignScanState.fdw_state.
@@ -96,15 +96,15 @@ typedef struct
 
 typedef struct RedisFdwExecutionState
 {
-	AttInMetadata	*attinmeta;
-	redisContext	*context;
-	redisReply	*reply;
+	AttInMetadata *attinmeta;
+	redisContext *context;
+	redisReply *reply;
 	long long	row;
-	char		*address;
-	int		port;
-	char		*password;
-	int		database;
-} RedisFdwExecutionState;
+	char	   *address;
+	int			port;
+	char	   *password;
+	int			database;
+}	RedisFdwExecutionState;
 
 /*
  * SQL functions
@@ -119,17 +119,17 @@ PG_FUNCTION_INFO_V1(redis_fdw_validator);
  * FDW callback routines
  */
 static void redisGetForeignRelSize(PlannerInfo *root,
-                                 RelOptInfo *baserel,
-                                 Oid foreigntableid);
+					   RelOptInfo *baserel,
+					   Oid foreigntableid);
 static void redisGetForeignPaths(PlannerInfo *root,
-                               RelOptInfo *baserel,
-                               Oid foreigntableid);
+					 RelOptInfo *baserel,
+					 Oid foreigntableid);
 static ForeignScan *redisGetForeignPlan(PlannerInfo *root,
-                                      RelOptInfo *baserel,
-                                      Oid foreigntableid,
-                                      ForeignPath *best_path,
-                                      List *tlist,
-                                      List *scan_clauses);
+					RelOptInfo *baserel,
+					Oid foreigntableid,
+					ForeignPath *best_path,
+					List *tlist,
+					List *scan_clauses);
 static void redisExplainForeignScan(ForeignScanState *node, ExplainState *es);
 static void redisBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *redisIterateForeignScan(ForeignScanState *node);
@@ -160,7 +160,7 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->GetForeignPaths = redisGetForeignPaths;
 	fdwroutine->GetForeignPlan = redisGetForeignPlan;
 	/* can't ANALYSE redis */
-	fdwroutine->AnalyzeForeignTable = NULL;  
+	fdwroutine->AnalyzeForeignTable = NULL;
 	fdwroutine->ExplainForeignScan = redisExplainForeignScan;
 	fdwroutine->BeginForeignScan = redisBeginForeignScan;
 	fdwroutine->IterateForeignScan = redisIterateForeignScan;
@@ -179,25 +179,25 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
 Datum
 redis_fdw_validator(PG_FUNCTION_ARGS)
 {
-	List		*options_list = untransformRelOptions(PG_GETARG_DATUM(0));
-	Oid		catalog = PG_GETARG_OID(1);
-	char		*svr_address = NULL;
-	int		svr_port = 0;
-	char		*svr_password = NULL;
-	int		svr_database = 0;
-	ListCell	*cell;
+	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+	Oid			catalog = PG_GETARG_OID(1);
+	char	   *svr_address = NULL;
+	int			svr_port = 0;
+	char	   *svr_password = NULL;
+	int			svr_database = 0;
+	ListCell   *cell;
 
 #ifdef DEBUG
 	elog(NOTICE, "redis_fdw_validator");
 #endif
 
 	/*
-	 * Check that only options supported by redis_fdw,
-	 * and allowed for the current object type, are given.
+	 * Check that only options supported by redis_fdw, and allowed for the
+	 * current object type, are given.
 	 */
 	foreach(cell, options_list)
 	{
-		DefElem	   *def = (DefElem *) lfirst(cell);
+		DefElem    *def = (DefElem *) lfirst(cell);
 
 		if (!redisIsValidOption(def->defname, catalog))
 		{
@@ -213,32 +213,32 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 			{
 				if (catalog == opt->optcontext)
 					appendStringInfo(&buf, "%s%s", (buf.len > 0) ? ", " : "",
-							 opt->optname);
+									 opt->optname);
 			}
 
-			ereport(ERROR, 
-				(errcode(ERRCODE_FDW_INVALID_OPTION_NAME), 
-				errmsg("invalid option \"%s\"", def->defname), 
-				errhint("Valid options in this context are: %s", buf.len ? buf.data : "<none>")
-				));
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+					 errmsg("invalid option \"%s\"", def->defname),
+					 errhint("Valid options in this context are: %s", buf.len ? buf.data : "<none>")
+					 ));
 		}
 
 		if (strcmp(def->defname, "address") == 0)
 		{
 			if (svr_address)
-				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), 
-					errmsg("conflicting or redundant options: address (%s)", defGetString(def))
-					));
+				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
+								errmsg("conflicting or redundant options: address (%s)", defGetString(def))
+								));
 
 			svr_address = defGetString(def);
 		}
 		else if (strcmp(def->defname, "port") == 0)
 		{
 			if (svr_port)
-				ereport(ERROR, 
-					(errcode(ERRCODE_SYNTAX_ERROR), 
-					errmsg("conflicting or redundant options: port (%s)", defGetString(def))
-					));
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options: port (%s)", defGetString(def))
+						 ));
 
 			svr_port = atoi(defGetString(def));
 		}
@@ -246,8 +246,8 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 		{
 			if (svr_password)
 				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-					errmsg("conflicting or redundant options: password")
-					));
+						 errmsg("conflicting or redundant options: password")
+								));
 
 			svr_password = defGetString(def);
 		}
@@ -255,9 +255,9 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 		{
 			if (svr_database)
 				ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					errmsg("conflicting or redundant options: database (%s)", defGetString(def))
-					));
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options: database (%s)", defGetString(def))
+						 ));
 
 			svr_database = atoi(defGetString(def));
 		}
@@ -294,19 +294,19 @@ redisIsValidOption(const char *option, Oid context)
 static void
 redisGetOptions(Oid foreigntableid, char **address, int *port, char **password, int *database)
 {
-	ForeignTable	*table;
-	ForeignServer	*server;
-	UserMapping	*mapping;
-	List		*options;
-	ListCell	*lc;
+	ForeignTable *table;
+	ForeignServer *server;
+	UserMapping *mapping;
+	List	   *options;
+	ListCell   *lc;
 
 #ifdef DEBUG
 	elog(NOTICE, "redisGetOptions");
 #endif
 
 	/*
-	 * Extract options from FDW objects.
-	 * We only need to worry about server options for Redis
+	 * Extract options from FDW objects. We only need to worry about server
+	 * options for Redis
 	 *
 	 */
 	table = GetForeignTable(foreigntableid);
@@ -321,7 +321,7 @@ redisGetOptions(Oid foreigntableid, char **address, int *port, char **password, 
 	/* Loop through the options, and get the server/port */
 	foreach(lc, options)
 	{
-		DefElem *def = (DefElem *) lfirst(lc);
+		DefElem    *def = (DefElem *) lfirst(lc);
 
 		if (strcmp(def->defname, "address") == 0)
 			*address = defGetString(def);
@@ -348,31 +348,31 @@ redisGetOptions(Oid foreigntableid, char **address, int *port, char **password, 
 }
 
 
-static void 
+static void
 redisGetForeignRelSize(PlannerInfo *root,
 					   RelOptInfo *baserel,
 					   Oid foreigntableid)
 {
-    RedisFdwPlanState *fdw_private;
+	RedisFdwPlanState *fdw_private;
 
-	char		*svr_address = NULL;
-	int		svr_port = 0;
-	char		*svr_password = NULL;
-	int 		svr_database = 0;
-	redisContext	*context;
-	redisReply	*reply;
-	struct timeval  timeout = {1, 500000};
+	char	   *svr_address = NULL;
+	int			svr_port = 0;
+	char	   *svr_password = NULL;
+	int			svr_database = 0;
+	redisContext *context;
+	redisReply *reply;
+	struct timeval timeout = {1, 500000};
 
 #ifdef DEBUG
 	elog(NOTICE, "redisGetForeignRelSize");
 #endif
 
-    /*
-     * Fetch options. Get everything so we don't need to 
-	 * re-fetch it later in planning.
-     */
-    fdw_private = (RedisFdwPlanState *) palloc(sizeof(RedisFdwPlanState));
-    baserel->fdw_private = (void *) fdw_private;
+	/*
+	 * Fetch options. Get everything so we don't need to re-fetch it later in
+	 * planning.
+	 */
+	fdw_private = (RedisFdwPlanState *) palloc(sizeof(RedisFdwPlanState));
+	baserel->fdw_private = (void *) fdw_private;
 
 	redisGetOptions(foreigntableid, &svr_address, &svr_port, &svr_password, &svr_database);
 	fdw_private->svr_address = svr_address;
@@ -384,23 +384,23 @@ redisGetForeignRelSize(PlannerInfo *root,
 	context = redisConnectWithTimeout(svr_address, svr_port, timeout);
 
 	if (context->err)
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION), 
-			errmsg("failed to connect to Redis: %d", context->err)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to connect to Redis: %d", context->err)
+				 ));
 
 	/* Authenticate */
 	if (svr_password)
 	{
-	       reply = redisCommand(context, "AUTH %s", svr_password);
+		reply = redisCommand(context, "AUTH %s", svr_password);
 
-	       if (!reply)
+		if (!reply)
 		{
 			redisFree(context);
 			ereport(ERROR,
-				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-				errmsg("failed to authenticate to redis: %d", context->err)
-				));
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				  errmsg("failed to authenticate to redis: %d", context->err)
+					 ));
 		}
 
 		freeReplyObject(reply);
@@ -412,10 +412,10 @@ redisGetForeignRelSize(PlannerInfo *root,
 	if (!reply)
 	{
 		redisFree(context);
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION), 
-			errmsg("failed to select database %d: %d", svr_database, context->err)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+		errmsg("failed to select database %d: %d", svr_database, context->err)
+				 ));
 	}
 
 	/* Execute a query to get the database size */
@@ -424,10 +424,10 @@ redisGetForeignRelSize(PlannerInfo *root,
 	if (!reply)
 	{
 		redisFree(context);
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION), 
-			errmsg("failed to get the database size: %d", context->err)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+				 errmsg("failed to get the database size: %d", context->err)
+				 ));
 	}
 
 	baserel->rows = reply->integer;
@@ -435,31 +435,31 @@ redisGetForeignRelSize(PlannerInfo *root,
 	freeReplyObject(reply);
 	redisFree(context);
 
-	
+
 }
 
 /*
  * redisGetForeignPaths
- *      Create possible access paths for a scan on the foreign table
+ *		Create possible access paths for a scan on the foreign table
  *
- *      Currently we don't support any push-down feature, so there is only one
- *      possible access path, which simply returns all records in redis.
+ *		Currently we don't support any push-down feature, so there is only one
+ *		possible access path, which simply returns all records in redis.
  */
-static void 
+static void
 redisGetForeignPaths(PlannerInfo *root,
 					 RelOptInfo *baserel,
 					 Oid foreigntableid)
 {
+	RedisFdwPlanState *fdw_private = baserel->fdw_private;
 
-    RedisFdwPlanState *fdw_private = baserel->fdw_private;
-
-	Cost        startup_cost, total_cost;
+	Cost		startup_cost,
+				total_cost;
 
 #ifdef DEBUG
 	elog(NOTICE, "redisGetForeignPaths");
 #endif
 
-	if (strcmp(fdw_private->svr_address, "127.0.0.1") == 0 || 
+	if (strcmp(fdw_private->svr_address, "127.0.0.1") == 0 ||
 		strcmp(fdw_private->svr_address, "localhost") == 0)
 		startup_cost = 10;
 	else
@@ -468,16 +468,16 @@ redisGetForeignPaths(PlannerInfo *root,
 	total_cost = startup_cost + baserel->rows;
 
 
-    /* Create a ForeignPath node and add it as only possible path */
-    add_path(baserel, (Path *)
-             create_foreignscan_path(root, baserel,
-                                     baserel->rows,
-                                     startup_cost,
-                                     total_cost,
-                                     NIL,       /* no pathkeys */
-                                     NULL,      /* no outer rel either */
-                                     NIL));     /* no fdw_private data */
-	
+	/* Create a ForeignPath node and add it as only possible path */
+	add_path(baserel, (Path *)
+			 create_foreignscan_path(root, baserel,
+									 baserel->rows,
+									 startup_cost,
+									 total_cost,
+									 NIL,		/* no pathkeys */
+									 NULL,		/* no outer rel either */
+									 NIL));		/* no fdw_private data */
+
 }
 
 static ForeignScan *
@@ -488,27 +488,27 @@ redisGetForeignPlan(PlannerInfo *root,
 					List *tlist,
 					List *scan_clauses)
 {
-    Index       scan_relid = baserel->relid;
+	Index		scan_relid = baserel->relid;
 
 #ifdef DEBUG
 	elog(NOTICE, "redisGetForeignPlan");
 #endif
 
-    /*
-     * We have no native ability to evaluate restriction clauses, so we just
-     * put all the scan_clauses into the plan node's qual list for the
-     * executor to check.  So all we have to do here is strip RestrictInfo
-     * nodes from the clauses and ignore pseudoconstants (which will be
-     * handled elsewhere).
-     */
-    scan_clauses = extract_actual_clauses(scan_clauses, false);
+	/*
+	 * We have no native ability to evaluate restriction clauses, so we just
+	 * put all the scan_clauses into the plan node's qual list for the
+	 * executor to check.  So all we have to do here is strip RestrictInfo
+	 * nodes from the clauses and ignore pseudoconstants (which will be
+	 * handled elsewhere).
+	 */
+	scan_clauses = extract_actual_clauses(scan_clauses, false);
 
-    /* Create the ForeignScan node */
-    return make_foreignscan(tlist,
-                            scan_clauses,
-                            scan_relid,
-                            NIL,    /* no expressions to evaluate */
-                            NIL);       /* no private state either */
+	/* Create the ForeignScan node */
+	return make_foreignscan(tlist,
+							scan_clauses,
+							scan_relid,
+							NIL,	/* no expressions to evaluate */
+							NIL);		/* no private state either */
 }
 
 /*
@@ -518,7 +518,7 @@ redisGetForeignPlan(PlannerInfo *root,
 static void
 redisExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
-	redisReply	*reply;
+	redisReply *reply;
 
 	RedisFdwExecutionState *festate = (RedisFdwExecutionState *) node->fdw_state;
 
@@ -532,19 +532,20 @@ redisExplainForeignScan(ForeignScanState *node, ExplainState *es)
 	if (!reply)
 	{
 		redisFree(festate->context);
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION), 
-			errmsg("failed to get the database size: %d", festate->context->err)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+		 errmsg("failed to get the database size: %d", festate->context->err)
+				 ));
 	}
 
 	if (reply->type == REDIS_REPLY_ERROR)
 	{
-		char *err = pstrdup(reply->str);
+		char	   *err = pstrdup(reply->str);
+
 		ereport(ERROR,
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-			errmsg("failed to get the database size: %s", err)
-			));
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to get the database size: %s", err)
+				 ));
 	}
 
 	/* Suppress file size if we're not showing cost details */
@@ -563,17 +564,17 @@ redisExplainForeignScan(ForeignScanState *node, ExplainState *es)
 static void
 redisBeginForeignScan(ForeignScanState *node, int eflags)
 {
-	char			*svr_address = NULL;
+	char	   *svr_address = NULL;
 	int			svr_port = 0;
-	char			*svr_password = NULL;
+	char	   *svr_password = NULL;
 	int			svr_database = 0;
-	redisContext		*context;
-	redisReply		*reply;
-	char			*qual_key = NULL;
-	char			*qual_value = NULL;
-	bool			pushdown = false;
-	RedisFdwExecutionState	*festate;
-	struct timeval		timeout = {1, 500000};
+	redisContext *context;
+	redisReply *reply;
+	char	   *qual_key = NULL;
+	char	   *qual_value = NULL;
+	bool		pushdown = false;
+	RedisFdwExecutionState *festate;
+	struct timeval timeout = {1, 500000};
 
 #ifdef DEBUG
 	elog(NOTICE, "BeginForeignScan");
@@ -588,24 +589,24 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	if (context->err)
 	{
 		redisFree(context);
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION), 
-			errmsg("failed to connect to Redis: %s", context->errstr)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to connect to Redis: %s", context->errstr)
+				 ));
 	}
 
 	/* Authenticate */
 	if (svr_password)
 	{
-	       reply = redisCommand(context, "AUTH %s", svr_password);
+		reply = redisCommand(context, "AUTH %s", svr_password);
 
- 	       if (!reply)
+		if (!reply)
 		{
 			redisFree(context);
 			ereport(ERROR,
-   			     	(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-				errmsg("failed to authenticate to redis: %s", context->errstr)
-				));
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+			   errmsg("failed to authenticate to redis: %s", context->errstr)
+					 ));
 		}
 
 		freeReplyObject(reply);
@@ -618,18 +619,19 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	{
 		redisFree(context);
 		ereport(ERROR,
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-			errmsg("failed to select database %d: %s", svr_database, context->errstr)
-			));
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to select database %d: %s", svr_database, context->errstr)
+				 ));
 	}
 
 	if (reply->type == REDIS_REPLY_ERROR)
 	{
-		char *err = pstrdup(reply->str);
+		char	   *err = pstrdup(reply->str);
+
 		ereport(ERROR,
-			(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-			errmsg("failed to select database %d: %s", svr_database, err)
-			));
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to select database %d: %s", svr_database, err)
+				 ));
 	}
 
 	freeReplyObject(reply);
@@ -637,9 +639,9 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	/* See if we've got a qual we can push down */
 	if (node->ss.ps.plan->qual)
 	{
-		ListCell	*lc;
+		ListCell   *lc;
 
-		foreach (lc, node->ss.ps.qual)
+		foreach(lc, node->ss.ps.qual)
 		{
 			/* Only the first qual can be pushed down to Redis */
 			ExprState  *state = lfirst(lc);
@@ -674,10 +676,10 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	if (!reply)
 	{
 		redisFree(festate->context);
-		ereport(ERROR, 
-			(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION), 
-			errmsg("failed to list keys: %s", context->errstr)
-			));
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+				 errmsg("failed to list keys: %s", context->errstr)
+				 ));
 	}
 
 	/* Store the additional state info */
@@ -693,12 +695,12 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 static TupleTableSlot *
 redisIterateForeignScan(ForeignScanState *node)
 {
-	bool			found;
-	redisReply		*reply = 0;
-	char			*key;
-	char 			*data = 0;
-	char			**values;
-	HeapTuple		tuple;
+	bool		found;
+	redisReply *reply = 0;
+	char	   *key;
+	char	   *data = 0;
+	char	  **values;
+	HeapTuple	tuple;
 
 	RedisFdwExecutionState *festate = (RedisFdwExecutionState *) node->fdw_state;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
@@ -716,10 +718,10 @@ redisIterateForeignScan(ForeignScanState *node)
 	if (festate->row < festate->reply->elements)
 	{
 		/*
-		 * Get the row, check the result type, and handle accordingly. 
-		 * If it's nil, we go ahead and get the next row.
+		 * Get the row, check the result type, and handle accordingly. If it's
+		 * nil, we go ahead and get the next row.
 		 */
-		do 
+		do
 		{
 			key = festate->reply->element[festate->row]->str;
 			reply = redisCommand(festate->context, "GET %s", key);
@@ -728,23 +730,23 @@ redisIterateForeignScan(ForeignScanState *node)
 			{
 				freeReplyObject(festate->reply);
 				redisFree(festate->context);
-				ereport(ERROR, (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY), 
-					errmsg("failed to get the value for key \"%s\": %s", key, festate->context->errstr)
-					));
+				ereport(ERROR, (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
+								errmsg("failed to get the value for key \"%s\": %s", key, festate->context->errstr)
+								));
 			}
 
 			festate->row++;
 
 		} while ((reply->type == REDIS_REPLY_NIL ||
-			  reply->type == REDIS_REPLY_STATUS ||
-			  reply->type == REDIS_REPLY_ERROR) && 
-			  festate->row < festate->reply->elements);
+				  reply->type == REDIS_REPLY_STATUS ||
+				  reply->type == REDIS_REPLY_ERROR) &&
+				 festate->row < festate->reply->elements);
 
 		if (festate->row <= festate->reply->elements)
 		{
-			/* 
-		 	 * Now, deal with the different data types we might
-			 * have got from Redis.
+			/*
+			 * Now, deal with the different data types we might have got from
+			 * Redis.
 			 */
 
 			switch (reply->type)
@@ -839,9 +841,10 @@ redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *push
 
 	if (IsA(node, OpExpr))
 	{
-		OpExpr	*op = (OpExpr *) node;
-		Node	*left, *right;
-		Index	varattno;
+		OpExpr	   *op = (OpExpr *) node;
+		Node	   *left,
+				   *right;
+		Index		varattno;
 
 		if (list_length(op->args) != 2)
 			return;
@@ -857,7 +860,7 @@ redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *push
 
 		if (IsA(right, Const))
 		{
-			StringInfoData  buf;
+			StringInfoData buf;
 
 			initStringInfo(&buf);
 
@@ -866,12 +869,11 @@ redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *push
 			*value = TextDatumGetCString(((Const *) right)->constvalue);
 
 			/*
-			 * We can push down this qual if:
-			 * - The operatory is TEXTEQ
-			 * - The qual is on the key column
+			 * We can push down this qual if: - The operatory is TEXTEQ - The
+			 * qual is on the key column
 			 */
 			if (op->opfuncid == PROCID_TEXTEQ && strcmp(*key, "key") == 0)
-                        	*pushdown = true;
+				*pushdown = true;
 
 			elog(NOTICE, "Got qual %s = %s", *key, *value);
 			return;
