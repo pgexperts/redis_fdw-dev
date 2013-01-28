@@ -108,11 +108,6 @@ typedef struct RedisFdwExecutionState
 	int			port;
 	char	   *password;
 	int			database;
-	char       *hashkey;
-	char       *listkey;
-	char       *setkey;
-	char       *zsetkey;
-	char       *usekey; /* qual value to use as the returned key */
 }	RedisFdwExecutionState;
 
 /*
@@ -429,16 +424,16 @@ redisGetOptions(Oid foreigntableid, RedisTableOptions table_options)
 			table_options->database = atoi(defGetString(def));
 
 		if (strcmp(def->defname, "hashkey") == 0)
-			table_options->hashkey = defGetString(def);
+			table_options->password = defGetString(def);
 
 		if (strcmp(def->defname, "listkey") == 0)
-			table_options->listkey = defGetString(def);
+			table_options->password = defGetString(def);
 
 		if (strcmp(def->defname, "setkey") == 0)
-			table_options->setkey = defGetString(def);
+			table_options->password = defGetString(def);
 
 		if (strcmp(def->defname, "zsetkey") == 0)
-			table_options->zsetkey = defGetString(def);
+			table_options->password = defGetString(def);
 	}
 
 	/* Default values, if required */
@@ -691,8 +686,6 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	/* Fetch options  */
 	redisGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &table_options);
 
-	/* elog(NOTICE,"got hashkey:\"%s\"",table_options.hashkey); */
-
 	/* Connect to the server */
 	context = redisConnectWithTimeout(table_options.address, table_options.port, timeout);
 
@@ -769,61 +762,19 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	festate->row = 0;
 	festate->address = table_options.address;
 	festate->port = table_options.port;
-	festate->hashkey = table_options.hashkey;
-	festate->listkey = table_options.listkey;
-	festate->setkey = table_options.setkey;
-	festate->zsetkey = table_options.zsetkey;
 
 	/* OK, we connected. If this is an EXPLAIN, bail out now */
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
 		return;
 
-	if (table_options.hashkey)
+	/* Execute the query */
+	if (qual_value && pushdown)
 	{
-		/* elog(NOTICE,"hashkey: %s",table_options.hashkey); */
-		if (qual_value && pushdown)
-		{
-			festate->usekey = qual_value;
-			reply = redisCommand(context, "HGET %s %s", table_options.hashkey, qual_value);
-		}
-		else
-		{
-			/* redis will give us the keys */
-			festate->usekey = NULL;
-			reply = redisCommand(context, "HGETALL %s", table_options.hashkey);
-		}
+		reply = redisCommand(context, "KEYS %s", qual_value);
+		elog(NOTICE, "Executed: KEYS %s", qual_value);
 	}
-
-	else if (table_options.listkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("listkey not yet implemented")));
-	}
-
-	else if (table_options.setkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("setkey not yet implemented")));
-	}
-
-	else if (table_options.zsetkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("zsetkey not yet implemented")));
-	}
-
 	else
-	{
-		/* just plain strings wanted */
-		/* Execute the query */
-		if (qual_value && pushdown)
-			reply = redisCommand(context, "KEYS %s", qual_value);
-		else
-			reply = redisCommand(context, "KEYS *");
-	}
+		reply = redisCommand(context, "KEYS *");
 
 	if (!reply)
 	{
@@ -867,77 +818,9 @@ redisIterateForeignScan(ForeignScanState *node)
 	/* Get the next record, and set found */
 	found = false;
 
-	if (festate->hashkey)
-	{
-		if (festate->usekey)
-		{
-			/* 
-			 * qualified search. should be at most one value - no key comes
-			 * back so just use the passed in qual as the key 
-			 */
-			key = festate->usekey;
-			/* elog(NOTICE,"festate->rwp: %d, festate->type: %d",festate->row, festate->reply->type); */
-			if (festate->row == 0 && festate->reply->type != REDIS_REPLY_NIL &&
-				  festate->reply->type != REDIS_REPLY_STATUS && 
-				  festate->reply->type != REDIS_REPLY_ERROR)
-			{
-				festate->row++;
-				switch (festate->reply->type)
-				{
-					case REDIS_REPLY_INTEGER:
-						data = (char *) palloc(sizeof(char) * 64);
-						snprintf(data, 64, "%lld", festate->reply->integer);
-						found = true;
-						break;
-						
-					case REDIS_REPLY_STRING:
-						data = festate->reply->str;
-						found = true;
-						break;
-						
-					case REDIS_REPLY_ARRAY:
-						data = "<array>";
-						found = true;
-						break;
-				}
-			}			
-		}
-		else
-		{
-			/* the elements will be key value key value ... */
-			if (festate->row < festate->reply->elements)
-			{
-				key = festate->reply->element[festate->row++]->str;
-				data = festate->reply->element[festate->row++]->str;
-				found = true;
-			}
-		}
-		
-	}
-	else if (festate->listkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("listkey not yet implemented")));
-	}
-	else if (festate->setkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("setkey not yet implemented")));
-	}
-	else if (festate->zsetkey)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("zsetkey not yet implemented")));
-	}
-
-	else if (festate->row < festate->reply->elements)
+	if (festate->row < festate->reply->elements)
 	{
 		/*
-		 * Normal Strings case.
-		 *
 		 * Get the row, check the result type, and handle accordingly. If it's
 		 * nil, we go ahead and get the next row.
 		 */
@@ -1089,13 +972,13 @@ redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *push
 			*value = TextDatumGetCString(((Const *) right)->constvalue);
 
 			/*
-			 * We can push down this qual if: - The operator is TEXTEQ - The
+			 * We can push down this qual if: - The operatory is TEXTEQ - The
 			 * qual is on the key column
 			 */
 			if (op->opfuncid == PROCID_TEXTEQ && strcmp(*key, "key") == 0)
 				*pushdown = true;
 
-			/* elog(NOTICE, "Got qual %s = %s", *key, *value); */
+			elog(NOTICE, "Got qual %s = %s", *key, *value);
 			return;
 		}
 	}
