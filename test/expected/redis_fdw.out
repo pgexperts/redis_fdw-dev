@@ -52,7 +52,7 @@ OK
 2
 2
 2
-select * from db15;
+select * from db15 order by key;
  key | value  
 -----+--------
  baz | blurfl
@@ -69,21 +69,21 @@ create foreign table db15hpa(key text, value text[])
 create foreign table db15hsa(key text, value text[]) 
        server localredis 
        options (tabletype 'hash', tablekeyset 'hkeys', database '15');
-select * from db15hp;
+select * from db15hp order by key;
   key  |                   value                   
 -------+-------------------------------------------
  hash1 | {"k1","v1","k2","v2","k3","v3","k4","v4"}
  hash2 | {"k1","v5","k2","v6","k3","v7","k4","v8"}
 (2 rows)
 
-select * from db15hpa;
+select * from db15hpa order by key;
   key  |           value           
 -------+---------------------------
  hash1 | {k1,v1,k2,v2,k3,v3,k4,v4}
  hash2 | {k1,v5,k2,v6,k3,v7,k4,v8}
 (2 rows)
 
-select * from db15hsa;
+select * from db15hsa order by key;
   key  |           value           
 -------+---------------------------
  hash1 | {k1,v1,k2,v2,k3,v3,k4,v4}
@@ -91,7 +91,7 @@ select * from db15hsa;
 (2 rows)
 
 -- a couple of nifty things we an do with hash tables
-select key, hstore(value) from db15hpa;
+select key, hstore(value) from db15hpa order by key;
   key  |                     hstore                     
 -------+------------------------------------------------
  hash1 | "k1"=>"v1", "k2"=>"v2", "k3"=>"v3", "k4"=>"v4"
@@ -99,7 +99,9 @@ select key, hstore(value) from db15hpa;
 (2 rows)
 
 create type atab as (k1 text, k2 text, k3 text);
-select key, (populate_record(null::atab, hstore(value))).* from db15hpa;
+select key, (populate_record(null::atab, hstore(value))).* 
+from db15hpa
+order by key;
   key  | k1 | k2 | k3 
 -------+----+----+----
  hash1 | v1 | v2 | v3
@@ -116,21 +118,21 @@ create foreign table db15spa(key text, value text[])
 create foreign table db15ssa(key text, value text[]) 
        server localredis 
        options (tabletype 'set', tablekeyset 'skeys', database '15');
-select * from db15sp;
+select * from db15sp order by key;
  key  |                   value                   
 ------+-------------------------------------------
  set1 | {"m1","m6","m7","m8","m2","m3","m4","m5"}
  set2 | {"m11","m8","m10","m9","m12"}
 (2 rows)
 
-select * from db15spa;
+select * from db15spa order by key;
  key  |           value           
 ------+---------------------------
  set1 | {m1,m6,m7,m8,m2,m3,m4,m5}
  set2 | {m11,m8,m10,m9,m12}
 (2 rows)
 
-select * from db15ssa;
+select * from db15ssa order by key;
  key  |           value           
 ------+---------------------------
  set1 | {m1,m6,m7,m8,m2,m3,m4,m5}
@@ -147,21 +149,21 @@ create foreign table db15lpa(key text, value text[])
 create foreign table db15lsa(key text, value text[]) 
        server localredis 
        options (tabletype 'list', tablekeyset 'lkeys', database '15');
-select * from db15lp;
+select * from db15lp order by key;
   key  |              value              
 -------+---------------------------------
  list1 | {"e6","e5","e4","e3","e2","e1"}
  list2 | {"e10","e9","e8","e7"}
 (2 rows)
 
-select * from db15lpa;
+select * from db15lpa order by key;
   key  |        value        
 -------+---------------------
  list1 | {e6,e5,e4,e3,e2,e1}
  list2 | {e10,e9,e8,e7}
 (2 rows)
 
-select * from db15lsa;
+select * from db15lsa order by key;
   key  |        value        
 -------+---------------------
  list1 | {e6,e5,e4,e3,e2,e1}
@@ -178,21 +180,21 @@ create foreign table db15zpa(key text, value text[])
 create foreign table db15zsa(key text, value text[]) 
        server localredis 
        options (tabletype 'zset', tablekeyset 'zkeys', database '15');
-select * from db15zp;
+select * from db15zp order by key;
   key  |               value                
 -------+------------------------------------
  zset1 | {"z1","z2","z3","z4","z5","z6"}
  zset2 | {"z7","z8","z9","z10","z11","z12"}
 (2 rows)
 
-select * from db15zpa;
+select * from db15zpa order by key;
   key  |         value          
 -------+------------------------
  zset1 | {z1,z2,z3,z4,z5,z6}
  zset2 | {z7,z8,z9,z10,z11,z12}
 (2 rows)
 
-select * from db15zsa;
+select * from db15zsa order by key;
   key  |         value          
 -------+------------------------
  zset1 | {z1,z2,z3,z4,z5,z6}

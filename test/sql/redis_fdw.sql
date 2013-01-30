@@ -50,7 +50,7 @@ $$;
 
 \! redis-cli < test/sql/redis_setup
 
-select * from db15;
+select * from db15 order by key;
 
 -- hash
 
@@ -66,19 +66,21 @@ create foreign table db15hsa(key text, value text[])
        server localredis 
        options (tabletype 'hash', tablekeyset 'hkeys', database '15');
 
-select * from db15hp;
+select * from db15hp order by key;
 
-select * from db15hpa;
+select * from db15hpa order by key;
 
-select * from db15hsa;
+select * from db15hsa order by key;
 
 -- a couple of nifty things we an do with hash tables
 
-select key, hstore(value) from db15hpa;
+select key, hstore(value) from db15hpa order by key;
 
 create type atab as (k1 text, k2 text, k3 text);
 
-select key, (populate_record(null::atab, hstore(value))).* from db15hpa;
+select key, (populate_record(null::atab, hstore(value))).* 
+from db15hpa
+order by key;
 
 -- set
 
@@ -94,11 +96,11 @@ create foreign table db15ssa(key text, value text[])
        server localredis 
        options (tabletype 'set', tablekeyset 'skeys', database '15');
 
-select * from db15sp;
+select * from db15sp order by key;
 
-select * from db15spa;
+select * from db15spa order by key;
 
-select * from db15ssa;
+select * from db15ssa order by key;
 
 -- list
 
@@ -114,11 +116,11 @@ create foreign table db15lsa(key text, value text[])
        server localredis 
        options (tabletype 'list', tablekeyset 'lkeys', database '15');
 
-select * from db15lp;
+select * from db15lp order by key;
 
-select * from db15lpa;
+select * from db15lpa order by key;
 
-select * from db15lsa;
+select * from db15lsa order by key;
 
 -- zset
 
@@ -134,11 +136,11 @@ create foreign table db15zsa(key text, value text[])
        server localredis 
        options (tabletype 'zset', tablekeyset 'zkeys', database '15');
 
-select * from db15zp;
+select * from db15zp order by key;
 
-select * from db15zpa;
+select * from db15zpa order by key;
 
-select * from db15zsa;
+select * from db15zsa order by key;
 
 -- all done,so now blow everything in the db away agan
 
