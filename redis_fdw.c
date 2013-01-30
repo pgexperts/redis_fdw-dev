@@ -2,11 +2,12 @@
  *
  *		  foreign-data wrapper for Redis
  *
- * Copyright (c) 2011, PostgreSQL Global Development Group
+ * Copyright (c) 2011,2013 PostgreSQL Global Development Group
  *
  * This software is released under the PostgreSQL Licence
  *
- * Author: Dave Page <dpage@pgadmin.org>
+ * Authors: Dave Page <dpage@pgadmin.org>
+ *          Andrew Dunstan <andrew@dunslane.net>
  *
  * IDENTIFICATION
  *		  redis_fdw/redis_fdw.c
@@ -542,7 +543,12 @@ redisGetForeignRelSize(PlannerInfo *root,
 				 ));
 	}
 
-	/* Execute a query to get the database size */
+	/* Execute a query to get the table size */
+#if 0
+	/*
+	 * KEYS is potentiallyexpensive, so this test is disabled and we use a
+	 * fairly dubious heuristic instead.
+	 */
 	if (table_options.keyprefix)
 	{
 		/* it's a pity there isn't an NKEYS command in Redis */
@@ -551,7 +557,9 @@ redisGetForeignRelSize(PlannerInfo *root,
 		snprintf(buff,len, "%s*",table_options.keyprefix);
 		reply = redisCommand(context,"KEYS %s",buff);
 	}
-	else if (table_options.keyset)
+	else
+#endif		
+	if (table_options.keyset)
 	{ 
 		reply = redisCommand(context,"SCARD %s",table_options.keyset);
 	}
@@ -569,10 +577,15 @@ redisGetForeignRelSize(PlannerInfo *root,
 				 ));
 	}
 
+#if 0
 	if (reply->type == REDIS_REPLY_ARRAY)
 		baserel->rows = reply->elements;
 	else
-		baserel->rows = reply->integer;
+#endif
+		if (table_options.keyprefix)
+			baserel->rows = reply->integer / 20;
+		else
+			baserel->rows = reply->integer;
 
 	freeReplyObject(reply);
 	redisFree(context);
@@ -669,15 +682,30 @@ redisExplainForeignScan(ForeignScanState *node, ExplainState *es)
 	elog(NOTICE, "redisExplainForeignScan");
 #endif
 
-	/* Execute a query to get the database size */
-	reply = redisCommand(festate->context, "DBSIZE");
+	if (!es->costs)
+		return;
+
+	/* 
+	 * Execute a query to get the table size 
+	 *
+	 * See above for more details.
+	 */
+   
+	if (festate->keyset)
+	{ 
+		reply = redisCommand(festate->context, "SCARD %s", festate->keyset);
+	}
+	else
+	{
+		reply = redisCommand(festate->context, "DBSIZE");
+	}
 
 	if (!reply)
 	{
 		redisFree(festate->context);
 		ereport(ERROR,
 				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-		 errmsg("failed to get the database size: %d", festate->context->err)
+		 errmsg("failed to get the table size: %d", festate->context->err)
 				 ));
 	}
 
@@ -687,15 +715,14 @@ redisExplainForeignScan(ForeignScanState *node, ExplainState *es)
 
 		ereport(ERROR,
 				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-				 errmsg("failed to get the database size: %s", err)
+				 errmsg("failed to get the table size: %s", err)
 				 ));
 	}
 
-	/* Suppress file size if we're not showing cost details */
-	if (es->costs)
-	{
-		ExplainPropertyLong("Foreign Redis Database Size", reply->integer, es);
-	}
+	ExplainPropertyLong("Foreign Redis Table Size", 
+						festate->keyprefix ? reply->integer / 20 : 
+						reply->integer, 
+						es);
 
 	freeReplyObject(reply);
 }
@@ -866,24 +893,20 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 		}
 
 		reply = redisCommand(context, "KEYS %s", qual_value);
-		/*elog(NOTICE, "Executed: KEYS %s", qual_value); */
 	}
 	else
 	{
 		/* no qual */
 		if (festate->keyset)
 		{
-			// elog(NOTICE,"getting set members");
 			reply = redisCommand(context, "SMEMBERS %s", festate->keyset);
 		}
 		else if (festate->keyprefix)
 		{
-			// elog(NOTICE,"getting prefix members");
 			reply = redisCommand(context, "KEYS %s*", festate->keyprefix);
 		}
 		else
 		{
-			// elog(NOTICE,"getting world");
 			reply = redisCommand(context, "KEYS *");
 		}
 	}
@@ -1118,7 +1141,6 @@ redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *push
 			if (op->opfuncid == PROCID_TEXTEQ && strcmp(*key, "key") == 0)
 				*pushdown = true;
 
-			// elog(NOTICE, "Got qual %s = %s", *key, *value);
 			return;
 		}
 	}
