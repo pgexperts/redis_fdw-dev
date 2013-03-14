@@ -104,7 +104,7 @@ Example
 		SERVER redis_server
 		OPTIONS (password 'secret');
 
-	CREATE TABLE myredishash (key text, value text[])
+	CREATE FOREIGN TABLE myredishash (key text, value text[])
 		SERVER redis_server
 		OPTIONS (database '0', tabletype 'hash, tablekeyprefix 'mytable:');
 	 
