@@ -21,7 +21,7 @@ or it might be available for your OS as it is for Fedora, for example.
 
 Once that's done, the extension can be built with:
 
-    PATH=/usr/local/pgsql91/bin/:$PATH make USE_PGXS=1 make
+    PATH=/usr/local/pgsql91/bin/:$PATH make USE_PGXS=1
     sudo PATH=/usr/local/pgsql91/bin/:$PATH make USE_PGXS=1 install
 
 (assuming you have PostgreSQL 9.1 in /usr/local/pgsql91).
