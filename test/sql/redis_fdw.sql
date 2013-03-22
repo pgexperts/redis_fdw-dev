@@ -1,3 +1,16 @@
+
+CREATE OR REPLACE FUNCTION atsort( a text[])
+ RETURNS text[]
+ LANGUAGE sql
+ IMMUTABLE  STRICT
+AS $function$
+  select array(select unnest($1) order by 1)
+$function$
+
+;
+
+
+
 create server localredis foreign data wrapper redis_fdw;
 
 create user mapping for public server localredis;
@@ -96,11 +109,16 @@ create foreign table db15ssa(key text, value text[])
        server localredis 
        options (tabletype 'set', tablekeyset 'skeys', database '15');
 
-select * from db15sp order by key;
+-- need to use atsort() on set results to get predicable output
+-- since redis will give them back in arbitrary order
+-- means we can't show the actual value for db15sp which has it as a 
+-- single text field
 
-select * from db15spa order by key;
+select key, atsort(value::text[]) as value from db15sp order by key;
 
-select * from db15ssa order by key;
+select key, atsort(value) as value from db15spa order by key;
+
+select key, atsort(value) as value from db15ssa order by key;
 
 -- list
 
