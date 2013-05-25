@@ -160,6 +160,62 @@ select * from db15zpa order by key;
 
 select * from db15zsa order by key;
 
+-- singleton scalar
+
+create foreign table db15g(value text) 
+       server localredis 
+       options (singleton_key 'foo', database '15');
+
+select * from db15g;
+
+-- singleton hash
+
+create foreign table db15gh(key text, value text) 
+       server localredis 
+       options (tabletype 'hash', singleton_key 'hash1', database '15');
+
+select * from db15gh order by key;
+
+
+-- singleton set
+
+create foreign table db15gs(value text) 
+       server localredis 
+       options (tabletype 'set', singleton_key 'set1', database '15');
+
+select * from db15gs order by value;
+
+
+-- singleton list
+
+create foreign table db15gl(value text) 
+       server localredis 
+       options (tabletype 'list', singleton_key 'list1', database '15');
+
+select * from db15gl order by value;
+
+
+-- singleton zset
+
+create foreign table db15gz(value text) 
+       server localredis 
+       options (tabletype 'zset', singleton_key 'zset1', database '15');
+
+select * from db15gz order by value;
+
+
+-- singleton zset with scores
+
+create foreign table db15gzs(value text, score numeric) 
+       server localredis 
+       options (tabletype 'zset', singleton_key 'zset1', database '15');
+
+select * from db15gzs order by score desc;
+
+
+
+
+
 -- all done,so now blow everything in the db away agan
 
 \! redis-cli < test/sql/redis_clean

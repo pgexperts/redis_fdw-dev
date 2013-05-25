@@ -213,6 +213,91 @@ select * from db15zsa order by key;
  zset2 | {z7,z8,z9,z10,z11,z12}
 (2 rows)
 
+-- singleton scalar
+create foreign table db15g(value text) 
+       server localredis 
+       options (singleton_key 'foo', database '15');
+select * from db15g;
+ value 
+-------
+ bar
+(1 row)
+
+-- singleton hash
+create foreign table db15gh(key text, value text) 
+       server localredis 
+       options (tabletype 'hash', singleton_key 'hash1', database '15');
+select * from db15gh order by key;
+ key | value 
+-----+-------
+ k1  | v1
+ k2  | v2
+ k3  | v3
+ k4  | v4
+(4 rows)
+
+-- singleton set
+create foreign table db15gs(value text) 
+       server localredis 
+       options (tabletype 'set', singleton_key 'set1', database '15');
+select * from db15gs order by value;
+ value 
+-------
+ m1
+ m2
+ m3
+ m4
+ m5
+ m6
+ m7
+ m8
+(8 rows)
+
+-- singleton list
+create foreign table db15gl(value text) 
+       server localredis 
+       options (tabletype 'list', singleton_key 'list1', database '15');
+select * from db15gl order by value;
+ value 
+-------
+ e1
+ e2
+ e3
+ e4
+ e5
+ e6
+(6 rows)
+
+-- singleton zset
+create foreign table db15gz(value text) 
+       server localredis 
+       options (tabletype 'zset', singleton_key 'zset1', database '15');
+select * from db15gz order by value;
+ value 
+-------
+ z1
+ z2
+ z3
+ z4
+ z5
+ z6
+(6 rows)
+
+-- singleton zset with scores
+create foreign table db15gzs(value text, score numeric) 
+       server localredis 
+       options (tabletype 'zset', singleton_key 'zset1', database '15');
+select * from db15gzs order by score desc;
+ value | score 
+-------+-------
+ z6    |     6
+ z5    |     5
+ z4    |     4
+ z3    |     3
+ z2    |     2
+ z1    |     1
+(6 rows)
+
 -- all done,so now blow everything in the db away agan
 \! redis-cli < test/sql/redis_clean
 OK
