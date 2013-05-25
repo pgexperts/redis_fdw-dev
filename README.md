@@ -6,7 +6,7 @@ the Redis key/value database: http://redis.io/
 
 This code was originally experimental, and largely intended as a pet project 
 for Dave to experiment with and learn about FDWs in PostgreSQL. It has now been
-extended for closer to production use by Andrew.
+extended for production use by Andrew.
 
 By all means use it, but do so entirely at your own risk! You have been
 warned!
@@ -75,11 +75,20 @@ database:	The numeric ID of the Redis database to query.
 (9.2 and later) tablekeyset: fetch item names from the named set
         Default: none
 
-You can only have one of tablekeyset and tablekeyprefix.
+(9.2 and later) singleton_key: get all the values in the table from a single
+named object.
+	    Default: none, meaning don't just use a single object.
+
+You can only have one of tablekeyset and tablekeyprefix, and if you use singleton_key you
+can't have either.
 
 Structured items are returned as array text, or, if the value column is a
 text array as an array of values. In the case of hash objects this array is
 an array of key, value, key, value ...
+
+Singleton key tables are returned as rows with a single column of text in the case of lists
+sets and scalars, rows with key and value text columns for hashes, and rows with a value text
+columns and an optional numeric score column for zsets.
 
 The following parameter can be set on a user mapping for a Redis
 foreign server:
@@ -116,7 +125,6 @@ on the localmachine with no password, and uses database 15, which must be empty,
 and that the redis-cli program is in the PATH when it is run.
 The test script checks that the database is empty before it tries to
 populate it, and it cleans up afterwards.
-
 
 
 Authors
