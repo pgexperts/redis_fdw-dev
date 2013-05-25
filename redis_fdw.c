@@ -826,6 +826,7 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	table_options.database = 0;
 	table_options.keyprefix = NULL;
     table_options.keyset = NULL;
+	table_options.singleton_key = NULL;
     table_options.table_type = PG_REDIS_SCALAR_TABLE;
 
 
