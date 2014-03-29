@@ -115,7 +115,7 @@ Example
 
 	CREATE FOREIGN TABLE myredishash (key text, value text[])
 		SERVER redis_server
-		OPTIONS (database '0', tabletype 'hash, tablekeyprefix 'mytable:');
+		OPTIONS (database '0', tabletype 'hash', tablekeyprefix 'mytable:');
 	 
 Testing
 -------
