@@ -67,6 +67,12 @@ select * from db15 order by key;
  foo | bar
 (2 rows)
 
+select * from db15 where key = 'foo';
+ key | value 
+-----+-------
+ foo | bar
+(1 row)
+
 -- hash
 create foreign table db15hp(key text, value text) 
        server localredis 
@@ -84,6 +90,12 @@ select * from db15hp order by key;
  hash2 | {"k1","v5","k2","v6","k3","v7","k4","v8"}
 (2 rows)
 
+select * from db15hp where key = 'hash1';
+  key  |                   value                   
+-------+-------------------------------------------
+ hash1 | {"k1","v1","k2","v2","k3","v3","k4","v4"}
+(1 row)
+
 select * from db15hpa order by key;
   key  |           value           
 -------+---------------------------
@@ -91,12 +103,24 @@ select * from db15hpa order by key;
  hash2 | {k1,v5,k2,v6,k3,v7,k4,v8}
 (2 rows)
 
+select * from db15hpa where key = 'hash1';
+  key  |           value           
+-------+---------------------------
+ hash1 | {k1,v1,k2,v2,k3,v3,k4,v4}
+(1 row)
+
 select * from db15hsa order by key;
   key  |           value           
 -------+---------------------------
  hash1 | {k1,v1,k2,v2,k3,v3,k4,v4}
  hash2 | {k1,v5,k2,v6,k3,v7,k4,v8}
 (2 rows)
+
+select * from db15hsa where key = 'hash1';
+  key  |           value           
+-------+---------------------------
+ hash1 | {k1,v1,k2,v2,k3,v3,k4,v4}
+(1 row)
 
 -- a couple of nifty things we an do with hash tables
 select key, hstore(value) from db15hpa order by key;
@@ -137,6 +161,12 @@ select key, atsort(value::text[]) as value from db15sp order by key;
  set2 | {m10,m11,m12,m8,m9}
 (2 rows)
 
+select key, atsort(value::text[]) as value from db15sp where key = 'set1';
+ key  |           value           
+------+---------------------------
+ set1 | {m1,m2,m3,m4,m5,m6,m7,m8}
+(1 row)
+
 select key, atsort(value) as value from db15spa order by key;
  key  |           value           
 ------+---------------------------
@@ -144,12 +174,24 @@ select key, atsort(value) as value from db15spa order by key;
  set2 | {m10,m11,m12,m8,m9}
 (2 rows)
 
+select key, atsort(value) as value from db15spa where key = 'set1';
+ key  |           value           
+------+---------------------------
+ set1 | {m1,m2,m3,m4,m5,m6,m7,m8}
+(1 row)
+
 select key, atsort(value) as value from db15ssa order by key;
  key  |           value           
 ------+---------------------------
  set1 | {m1,m2,m3,m4,m5,m6,m7,m8}
  set2 | {m10,m11,m12,m8,m9}
 (2 rows)
+
+select key, atsort(value) as value from db15ssa where key = 'set1';
+ key  |           value           
+------+---------------------------
+ set1 | {m1,m2,m3,m4,m5,m6,m7,m8}
+(1 row)
 
 -- list
 create foreign table db15lp(key text, value text) 
@@ -168,6 +210,12 @@ select * from db15lp order by key;
  list2 | {"e10","e9","e8","e7"}
 (2 rows)
 
+select * from db15lp where key = 'list1';
+  key  |              value              
+-------+---------------------------------
+ list1 | {"e6","e5","e4","e3","e2","e1"}
+(1 row)
+
 select * from db15lpa order by key;
   key  |        value        
 -------+---------------------
@@ -175,12 +223,24 @@ select * from db15lpa order by key;
  list2 | {e10,e9,e8,e7}
 (2 rows)
 
+select * from db15lpa where key = 'list1';
+  key  |        value        
+-------+---------------------
+ list1 | {e6,e5,e4,e3,e2,e1}
+(1 row)
+
 select * from db15lsa order by key;
   key  |        value        
 -------+---------------------
  list1 | {e6,e5,e4,e3,e2,e1}
  list2 | {e10,e9,e8,e7}
 (2 rows)
+
+select * from db15lsa where key = 'list1';
+  key  |        value        
+-------+---------------------
+ list1 | {e6,e5,e4,e3,e2,e1}
+(1 row)
 
 -- zset
 create foreign table db15zp(key text, value text) 
@@ -199,6 +259,12 @@ select * from db15zp order by key;
  zset2 | {"z7","z8","z9","z10","z11","z12"}
 (2 rows)
 
+select * from db15zp where key = 'zset1';
+  key  |              value              
+-------+---------------------------------
+ zset1 | {"z1","z2","z3","z4","z5","z6"}
+(1 row)
+
 select * from db15zpa order by key;
   key  |         value          
 -------+------------------------
@@ -206,12 +272,24 @@ select * from db15zpa order by key;
  zset2 | {z7,z8,z9,z10,z11,z12}
 (2 rows)
 
+select * from db15zpa where key = 'zset1';
+  key  |        value        
+-------+---------------------
+ zset1 | {z1,z2,z3,z4,z5,z6}
+(1 row)
+
 select * from db15zsa order by key;
   key  |         value          
 -------+------------------------
  zset1 | {z1,z2,z3,z4,z5,z6}
  zset2 | {z7,z8,z9,z10,z11,z12}
 (2 rows)
+
+select * from db15zsa where key = 'zset1';
+  key  |        value        
+-------+---------------------
+ zset1 | {z1,z2,z3,z4,z5,z6}
+(1 row)
 
 -- singleton scalar
 create foreign table db15g(value text) 

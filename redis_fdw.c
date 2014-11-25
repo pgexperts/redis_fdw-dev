@@ -995,7 +995,7 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 		else if (festate->keyprefix)
 		{
 			if (strncmp(qual_value, festate->keyprefix, 
-						strlen(festate->keyprefix)) == 0)
+						strlen(festate->keyprefix)) != 0)
 				festate->row = -1;
 		}
 

@@ -65,6 +65,8 @@ $$;
 
 select * from db15 order by key;
 
+select * from db15 where key = 'foo';
+
 -- hash
 
 create foreign table db15hp(key text, value text) 
@@ -80,10 +82,13 @@ create foreign table db15hsa(key text, value text[])
        options (tabletype 'hash', tablekeyset 'hkeys', database '15');
 
 select * from db15hp order by key;
+select * from db15hp where key = 'hash1';
 
 select * from db15hpa order by key;
+select * from db15hpa where key = 'hash1';
 
 select * from db15hsa order by key;
+select * from db15hsa where key = 'hash1';
 
 -- a couple of nifty things we an do with hash tables
 
@@ -115,10 +120,13 @@ create foreign table db15ssa(key text, value text[])
 -- single text field
 
 select key, atsort(value::text[]) as value from db15sp order by key;
+select key, atsort(value::text[]) as value from db15sp where key = 'set1';
 
 select key, atsort(value) as value from db15spa order by key;
+select key, atsort(value) as value from db15spa where key = 'set1';
 
 select key, atsort(value) as value from db15ssa order by key;
+select key, atsort(value) as value from db15ssa where key = 'set1';
 
 -- list
 
@@ -135,10 +143,13 @@ create foreign table db15lsa(key text, value text[])
        options (tabletype 'list', tablekeyset 'lkeys', database '15');
 
 select * from db15lp order by key;
+select * from db15lp where key = 'list1';
 
 select * from db15lpa order by key;
+select * from db15lpa where key = 'list1';
 
 select * from db15lsa order by key;
+select * from db15lsa where key = 'list1';
 
 -- zset
 
@@ -155,10 +166,13 @@ create foreign table db15zsa(key text, value text[])
        options (tabletype 'zset', tablekeyset 'zkeys', database '15');
 
 select * from db15zp order by key;
+select * from db15zp where key = 'zset1';
 
 select * from db15zpa order by key;
+select * from db15zpa where key = 'zset1';
 
 select * from db15zsa order by key;
+select * from db15zsa where key = 'zset1';
 
 -- singleton scalar
 
