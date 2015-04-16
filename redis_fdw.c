@@ -44,13 +44,16 @@
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "mb/pg_wchar.h"
+#include "nodes/relation.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "parser/parsetree.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 PG_MODULE_MAGIC;
@@ -141,6 +144,24 @@ typedef struct RedisFdwExecutionState
 	redis_table_type table_type;
 }	RedisFdwExecutionState;
 
+typedef struct RedisFdwModifyState
+{
+	redisContext *context;
+	char	   *address;
+	int			port;
+	char	   *password;
+	int			database;
+	char       *keyprefix;
+	char       *keyset;
+	char       *qual_value;
+	char       *singleton_key;
+	Relation			rel;
+	redis_table_type table_type;
+	List			   *target_attrs;
+	int					p_nums;
+	FmgrInfo		   *p_flinfo;
+}	RedisFdwModifyState;
+
 /*
  * SQL functions
  */
@@ -173,6 +194,28 @@ static inline TupleTableSlot *redisIterateForeignScanSingleton(ForeignScanState 
 static void redisReScanForeignScan(ForeignScanState *node);
 static void redisEndForeignScan(ForeignScanState *node);
 
+
+static List *redisPlanForeignModify(PlannerInfo *root,
+									ModifyTable *plan,
+									Index resultRelation,
+									int subplan_index);
+
+static void redisBeginForeignModify(ModifyTableState *mtstate,
+									ResultRelInfo *rinfo,
+									List *fdw_private,
+									int subplan_index,
+									int eflags);
+
+static TupleTableSlot *redisExecForeignInsert(EState *estate,
+											  ResultRelInfo *rinfo,
+											  TupleTableSlot *slot,
+											  TupleTableSlot *planSlot);
+static void redisEndForeignModify(EState *estate,
+								  ResultRelInfo *rinfo);
+
+
+
+
 /*
  * Helper functions
  */
@@ -203,6 +246,12 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->IterateForeignScan = redisIterateForeignScan;
 	fdwroutine->ReScanForeignScan = redisReScanForeignScan;
 	fdwroutine->EndForeignScan = redisEndForeignScan;
+
+    fdwroutine->PlanForeignModify = redisPlanForeignModify; /* I U D */
+    fdwroutine->BeginForeignModify = redisBeginForeignModify;  /* I U D */
+    fdwroutine->ExecForeignInsert = redisExecForeignInsert; /* I */
+    fdwroutine->EndForeignModify = redisEndForeignModify; /* I U D */
+
 
 	PG_RETURN_POINTER(fdwroutine);
 }
@@ -1459,4 +1508,455 @@ process_redis_array(redisReply *reply,	redis_table_type type)
     appendStringInfoChar(res,'}');
     
     return res->data;
+}
+
+
+
+static List *
+redisPlanForeignModify(PlannerInfo *root,
+					   ModifyTable *plan,
+					   Index resultRelation,
+					   int subplan_index)
+{
+	CmdType			operation = plan->operation;
+	RangeTblEntry  *rte = planner_rt_fetch(resultRelation, root);
+	Relation		rel;
+	List		   *targetAttrs = NIL;
+
+
+	/*
+	 * RETURNING list not supported
+	 */
+	if (plan->returningLists)
+		elog(ERROR, "RETURNING is not supported by this FDW");
+
+	if (operation == CMD_INSERT)
+	{
+		TupleDesc	tupdesc;
+		int			attnum;
+
+		rel = heap_open(rte->relid, NoLock);
+		tupdesc = RelationGetDescr(rel);
+
+		for (attnum = 1; attnum <= tupdesc->natts; attnum++)
+		{
+			Form_pg_attribute attr = tupdesc->attrs[attnum - 1];
+
+			if (!attr->attisdropped)
+				targetAttrs = lappend_int(targetAttrs, attnum);
+		}
+
+		heap_close(rel, NoLock);
+	}
+	else
+	{
+		elog(ERROR, "UPDATE / INSERT not yet supported");
+	}
+
+	return list_make1(targetAttrs);
+}
+
+static void
+redisBeginForeignModify(ModifyTableState *mtstate,
+						ResultRelInfo *rinfo,
+						List *fdw_private,
+						int subplan_index,
+						int eflags)
+{
+
+	redisTableOptions table_options;
+	redisContext *context;
+	redisReply *reply;
+	RedisFdwModifyState *fmstate;
+	struct timeval timeout = {1, 500000};
+	Relation			rel = rinfo->ri_RelationDesc;
+	ListCell		*lc;
+	Oid					typefnoid;
+	bool				isvarlena;
+	// CmdType             op = mtstate->operation;
+
+#ifdef DEBUG
+	elog(NOTICE, "BeginForeignModify");
+#endif
+
+	table_options.address = NULL;
+	table_options.port = 0;
+	table_options.password = NULL;
+	table_options.database = 0;
+	table_options.keyprefix = NULL;
+    table_options.keyset = NULL;
+	table_options.singleton_key = NULL;
+    table_options.table_type = PG_REDIS_SCALAR_TABLE;
+
+
+	/* Fetch options  */
+	redisGetOptions(RelationGetRelid(rel), 
+					&table_options);
+	
+
+	fmstate = (RedisFdwModifyState *) palloc(sizeof(RedisFdwModifyState));
+	rinfo->ri_FdwState = fmstate;
+	fmstate->rel = rel;
+	fmstate->address = table_options.address;
+	fmstate->port = table_options.port;
+	fmstate->keyprefix = table_options.keyprefix;
+	fmstate->keyset = table_options.keyset;
+	fmstate->singleton_key = table_options.singleton_key;
+	fmstate->table_type = table_options.table_type;
+	fmstate->target_attrs = (List *) list_nth(fdw_private, 0);
+
+	fmstate->p_flinfo = (FmgrInfo *) palloc0(
+											 sizeof(FmgrInfo) * list_length(fmstate->target_attrs));
+
+	fmstate->p_nums = 0;
+	foreach(lc, fmstate->target_attrs)
+	{
+		int attnum = lfirst_int(lc);
+		Form_pg_attribute attr = RelationGetDescr(rel)->attrs[attnum - 1];
+
+		getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
+		fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
+		fmstate->p_nums++;
+	}
+
+	/* 
+	 * Now do some sanity checking on the number of table attributes.
+	 * Since we do these here we can assume everthing is OK when we do the
+	 * per row functions.
+	 */
+
+	if (table_options.singleton_key)
+	{
+		if (table_options.table_type == PG_REDIS_ZSET_TABLE && fmstate->p_nums < 2)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("operation not supported for singleton zset table without priorities column")
+						));
+		else if (fmstate->p_nums != ((table_options.table_type == PG_REDIS_HASH_TABLE || table_options.table_type == PG_REDIS_ZSET_TABLE) ? 2 : 1))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("table has incorrect number of columns")
+						));
+	}
+	else if (table_options.table_type == PG_REDIS_ZSET_TABLE)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("operation on zset table is not supported")
+					));
+	}
+	else if (fmstate->p_nums != 2)
+	{
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("table has incorrect number of columns")
+						));
+	}
+
+	/* 
+	 * all the checks have been done but no actual work done or connections made.
+	 * That makes this the right spot to return if w're doing explain only.
+	 */
+
+	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
+		return;
+
+	/* Finally, Connect to the server and set the Redis execution context*/
+	context = redisConnectWithTimeout(table_options.address, 
+									  table_options.port, timeout);
+	
+	if (context->err)
+	{
+		redisFree(context);
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to connect to Redis: %s", context->errstr)
+					));
+	}
+	
+	/* Authenticate */
+	if (table_options.password)
+	{
+		reply = redisCommand(context, "AUTH %s", table_options.password);
+		
+		if (!reply)
+		{
+			redisFree(context);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+			   errmsg("failed to authenticate to redis: %s", context->errstr)
+					 ));
+		}
+
+		freeReplyObject(reply);
+	}
+
+	/* Select the appropriate database */
+	reply = redisCommand(context, "SELECT %d", table_options.database);
+
+	if (!reply)
+	{
+		redisFree(context);
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to select database %d: %s", 
+						table_options.database, context->errstr)
+				 ));
+	}
+
+	if (reply->type == REDIS_REPLY_ERROR)
+	{
+		char	   *err = pstrdup(reply->str);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to select database %d: %s", 
+						table_options.database, err)
+				 ));
+	}
+
+	freeReplyObject(reply);
+
+	fmstate->context = context;
+
+}
+
+static TupleTableSlot *
+redisExecForeignInsert(EState *estate,
+					   ResultRelInfo *rinfo,
+					   TupleTableSlot *slot,
+					   TupleTableSlot *planSlot)
+{
+
+	RedisFdwModifyState *fmstate = 
+		(RedisFdwModifyState *) rinfo->ri_FdwState;
+	redisContext *context = fmstate->context;
+	redisReply *sreply = NULL;
+	bool isnull;
+	Datum key;
+	char *keyval;
+	
+	key = slot_getattr(slot, 1, &isnull);
+	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], key);
+	
+	if (fmstate->singleton_key)
+	{
+
+		char *rkeyval;
+		char *extraval = ""; /* hash value or zset priority */
+
+		if (fmstate->table_type ==  PG_REDIS_SCALAR_TABLE)
+			rkeyval = fmstate->singleton_key;
+		else
+			rkeyval = keyval;
+	
+		/* check if key is there using EXISTS / HEXISTS / SISMEMBER / ZRANK */
+		/* not an error for a list type singleton - they don't have to be unique */
+
+
+		elog(NOTICE,"singleton table %s, keyval %s",fmstate->singleton_key,keyval);
+
+
+		switch(fmstate->table_type)
+		{
+			case PG_REDIS_SCALAR_TABLE:
+				sreply = redisCommand(context, "EXISTS %s", /* 1 or 0 */
+									  fmstate->singleton_key);
+				break;
+			case PG_REDIS_HASH_TABLE:
+				sreply = redisCommand(context, "HEXISTS %s %s", /* 1 or 0 */
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_SET_TABLE:
+				sreply = redisCommand(context, "SISMEMBER %s %s",  /* 1 or 0 */
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_ZSET_TABLE:
+				sreply = redisCommand(context, "ZRANK %s %s", /* n or nil */
+
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_LIST_TABLE:
+			default:
+				break;
+		}
+
+		if (fmstate->table_type != PG_REDIS_LIST_TABLE)
+		{
+
+			bool ok = true;
+
+			if(!sreply)
+			{
+				redisFree(fmstate->context);
+				ereport(ERROR,
+						(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+						 errmsg("failed to check key existence: %s", context->errstr)
+							));
+			}
+			if (sreply->type == REDIS_REPLY_ERROR)
+			{
+				char	   *err = pstrdup(sreply->str);
+				
+				freeReplyObject(sreply);
+				ereport(ERROR,
+						(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+						 errmsg("failed to list keys: %s", err)
+							));
+			}
+
+			if (fmstate->table_type != PG_REDIS_ZSET_TABLE)
+				ok = sreply->type == REDIS_REPLY_INTEGER && sreply->integer == 0;
+			else
+				ok = sreply->type == REDIS_REPLY_NIL;
+
+			freeReplyObject(sreply);
+
+			if (!ok)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_UNIQUE_VIOLATION),
+						 errmsg("key already exists: %s", rkeyval)));
+			}
+		}
+
+		/* if OK add the value using SET / HSET / SADD / ZADD / RPUSH */
+
+		/* get the second value for appropriate table types */
+
+		if (fmstate->table_type == PG_REDIS_ZSET_TABLE || fmstate->table_type == PG_REDIS_HASH_TABLE)
+		{
+			Datum extra;
+			
+			extra = slot_getattr(slot, 2, &isnull);
+			extraval = OutputFunctionCall(&fmstate->p_flinfo[1], extra);
+		}
+
+		switch(fmstate->table_type)
+		{
+			case PG_REDIS_SCALAR_TABLE:
+				sreply = redisCommand(context, "SET %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_SET_TABLE:
+				sreply = redisCommand(context, "SADD %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_LIST_TABLE:
+				sreply = redisCommand(context, "RPUSH %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_HASH_TABLE:
+				sreply = redisCommand(context, "HSET %s %s %s",
+									  fmstate->singleton_key, keyval, extraval);
+				break;
+			case PG_REDIS_ZSET_TABLE:
+				/* score comes BEFORE value in ZADD, which seems slightly perverse */
+				sreply = redisCommand(context, "ZADD %s %s %s",
+									  fmstate->singleton_key, extraval, keyval);
+				break;
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("insert not supported for this type of table")
+							));
+		}
+		
+	}
+	else
+	{
+		/* 
+		 * not a singleton key table
+		 *
+		 * First, check if key is there using EXISTS 
+		 */
+
+		sreply = redisCommand(context, "EXISTS %s", /* 1 or 0 */
+							  keyval);
+		if(!sreply)
+		{
+			redisFree(fmstate->context);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+					 errmsg("failed to check key existence: %s", context->errstr)
+						));
+		}
+
+		if (sreply->type == REDIS_REPLY_ERROR)
+		{
+			char	   *err = pstrdup(sreply->str);
+			
+			freeReplyObject(sreply);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 errmsg("failed to list keys: %s", err)
+						));
+		}
+		
+		if (sreply->type != REDIS_REPLY_INTEGER || sreply->integer != 0)
+		{
+			freeReplyObject(sreply);
+			ereport(ERROR,
+					(errcode(ERRCODE_UNIQUE_VIOLATION),
+					 errmsg("key already exists: %s", keyval)));			
+		}
+
+		freeReplyObject(sreply);
+
+		/* if OK add values using SET / HMSET / SADD / ZADD / RPUSH */
+
+		switch(fmstate->table_type)
+		{
+#if 0
+			case PG_REDIS_SCALAR_TABLE:
+				sreply = redisCommand(context, "SET %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_SET_TABLE:
+				sreply = redisCommand(context, "SADD %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_LIST_TABLE:
+				sreply = redisCommand(context, "RPUSH %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+#endif				
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("insert not supported for this type of table")
+							));
+		}
+
+		/* if it's a keyset organized table, add key to keyset using SADD */
+
+		if (fmstate->keyset)
+		{
+			sreply = redisCommand(context, "SADD %s %s",
+									  fmstate->keyset, keyval);
+		}
+
+	}
+
+	
+
+	return slot;
+}
+
+static void
+redisEndForeignModify(EState *estate,
+					  ResultRelInfo *rinfo)
+{
+	RedisFdwModifyState *fmstate = (RedisFdwModifyState *) rinfo->ri_FdwState;
+
+#ifdef DEBUG
+	elog(NOTICE, "redisEndForeignScan");
+#endif
+
+	/* if fmstate is NULL, we are in EXPLAIN; nothing to do */
+	if (fmstate)
+	{
+		if (fmstate->context)
+			redisFree(fmstate->context);
+	}
 }
