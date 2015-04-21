@@ -34,6 +34,7 @@
 
 #include "funcapi.h"
 #include "access/reloptions.h"
+#include "access/sysattr.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
@@ -45,6 +46,7 @@
 #include "miscadmin.h"
 #include "mb/pg_wchar.h"
 #include "nodes/relation.h"
+#include "nodes/makefuncs.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
@@ -144,6 +146,8 @@ typedef struct RedisFdwExecutionState
 	redis_table_type table_type;
 }	RedisFdwExecutionState;
 
+#define REDISJUNKATTNAME "redis_mod_key"
+
 typedef struct RedisFdwModifyState
 {
 	redisContext *context;
@@ -212,9 +216,13 @@ static TupleTableSlot *redisExecForeignInsert(EState *estate,
 											  TupleTableSlot *planSlot);
 static void redisEndForeignModify(EState *estate,
 								  ResultRelInfo *rinfo);
-
-
-
+static void redisAddForeignUpdateTargets(Query *parsetree,
+										 RangeTblEntry *target_rte,
+										 Relation target_relation);
+static TupleTableSlot *redisExecForeignDelete(EState *estate,
+											  ResultRelInfo *rinfo,
+											  TupleTableSlot *slot,
+											  TupleTableSlot *planSlot);
 
 /*
  * Helper functions
@@ -252,7 +260,9 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
     fdwroutine->ExecForeignInsert = redisExecForeignInsert; /* I */
     fdwroutine->EndForeignModify = redisEndForeignModify; /* I U D */
 
-
+	fdwroutine->ExecForeignDelete = redisExecForeignDelete; /* D */
+    fdwroutine->AddForeignUpdateTargets = redisAddForeignUpdateTargets;/* U D */
+ 
 	PG_RETURN_POINTER(fdwroutine);
 }
 
@@ -1512,6 +1522,48 @@ process_redis_array(redisReply *reply,	redis_table_type type)
 
 
 
+static void 
+redisAddForeignUpdateTargets(Query *parsetree,
+							 RangeTblEntry *target_rte,
+							 Relation target_relation)
+{
+    Var        *var;
+    const char *attrname;
+    TargetEntry *tle;
+
+	/* XXX assumes for the moment that this isn't attisdropped */
+	Form_pg_attribute attr =
+				RelationGetDescr(target_relation)->attrs[0];
+
+    /*
+     * Code adapted from  postgres_fdw
+	 *
+	 * In Redis, we need the key name. It's the first column in the table
+	 * regardless of the table type. Knowing the key, we can update or delete
+	 * it.
+     */
+
+    /* Make a Var representing the desired value */
+    var = makeVar(parsetree->resultRelation,
+                  1,
+                  attr->atttypid,
+                  attr->atttypmod,
+                  InvalidOid,
+                  0);
+
+    /* Wrap it in a resjunk TLE with the right name ... */
+    attrname = NameStr(attr->attname);
+
+    tle = makeTargetEntry((Expr *) var,
+                          list_length(parsetree->targetList) + 1,
+                          pstrdup(attrname),
+                          true);
+
+    /* ... and add it to the query's targetlist */
+    parsetree->targetList = lappend(parsetree->targetList, tle);
+	
+}
+
 static List *
 redisPlanForeignModify(PlannerInfo *root,
 					   ModifyTable *plan,
@@ -1522,6 +1574,7 @@ redisPlanForeignModify(PlannerInfo *root,
 	RangeTblEntry  *rte = planner_rt_fetch(resultRelation, root);
 	Relation		rel;
 	List		   *targetAttrs = NIL;
+	TupleDesc	tupdesc;
 
 
 	/*
@@ -1530,13 +1583,13 @@ redisPlanForeignModify(PlannerInfo *root,
 	if (plan->returningLists)
 		elog(ERROR, "RETURNING is not supported by this FDW");
 
+	rel = heap_open(rte->relid, NoLock);
+	tupdesc = RelationGetDescr(rel);
+
+
 	if (operation == CMD_INSERT)
 	{
-		TupleDesc	tupdesc;
 		int			attnum;
-
-		rel = heap_open(rte->relid, NoLock);
-		tupdesc = RelationGetDescr(rel);
 
 		for (attnum = 1; attnum <= tupdesc->natts; attnum++)
 		{
@@ -1546,12 +1599,37 @@ redisPlanForeignModify(PlannerInfo *root,
 				targetAttrs = lappend_int(targetAttrs, attnum);
 		}
 
-		heap_close(rel, NoLock);
 	}
-	else
+	else if (operation == CMD_UPDATE)
 	{
-		elog(ERROR, "UPDATE / INSERT not yet supported");
+
+		/* code borrowed from mysql fdw */
+		Bitmapset *tmpset = bms_copy(rte->modifiedCols);
+		AttrNumber col;
+
+		while ((col = bms_first_member(tmpset)) >= 0)
+		{
+			col += FirstLowInvalidHeapAttributeNumber;
+			if (col <= InvalidAttrNumber) /* shouldn't happen */
+				elog(ERROR, "system-column update is not supported");
+            /*
+			 * We also disallow updates to the first column
+			 */
+			if (col == 1) /* shouldn't happen */
+				elog(ERROR, "key column update is not supported");
+			targetAttrs = lappend_int(targetAttrs, col);
+		}
+
+        /* We also want the key column to be available for the update */
+		targetAttrs = lcons_int(1, targetAttrs);
 	}
+	else /* DELETE */
+	{
+		/* key of the row to delete */
+		targetAttrs = lcons_int(1, targetAttrs);
+	}
+
+	heap_close(rel, NoLock);
 
 	return list_make1(targetAttrs);
 }
@@ -1573,7 +1651,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	ListCell		*lc;
 	Oid					typefnoid;
 	bool				isvarlena;
-	// CmdType             op = mtstate->operation;
+	CmdType             op = mtstate->operation;
 
 #ifdef DEBUG
 	elog(NOTICE, "BeginForeignModify");
@@ -1609,6 +1687,8 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 											 sizeof(FmgrInfo) * list_length(fmstate->target_attrs));
 
 	fmstate->p_nums = 0;
+
+
 	foreach(lc, fmstate->target_attrs)
 	{
 		int attnum = lfirst_int(lc);
@@ -1625,37 +1705,48 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	 * per row functions.
 	 */
 
-	if (table_options.singleton_key)
+	if (op == CMD_INSERT)
 	{
-		if (table_options.table_type == PG_REDIS_ZSET_TABLE && fmstate->p_nums < 2)
+		if (table_options.singleton_key)
+		{
+			if (table_options.table_type == PG_REDIS_ZSET_TABLE && fmstate->p_nums < 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("operation not supported for singleton zset table without priorities column")
+							));
+			else if (fmstate->p_nums != ((table_options.table_type == PG_REDIS_HASH_TABLE || table_options.table_type == PG_REDIS_ZSET_TABLE) ? 2 : 1))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("table has incorrect number of columns")
+							));
+		}
+		else if (table_options.table_type == PG_REDIS_ZSET_TABLE)
+		{
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("operation not supported for singleton zset table without priorities column")
+					 errmsg("operation on zset table is not supported")
 						));
-		else if (fmstate->p_nums != ((table_options.table_type == PG_REDIS_HASH_TABLE || table_options.table_type == PG_REDIS_ZSET_TABLE) ? 2 : 1))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("table has incorrect number of columns")
-						));
+		}
+		else if (fmstate->p_nums != 2)
+		{
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("table has incorrect number of columns")
+							));
+		}
 	}
-	else if (table_options.table_type == PG_REDIS_ZSET_TABLE)
+	else if (op == CMD_UPDATE)
 	{
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("operation on zset table is not supported")
-					));
+		/* do we need anything here? */
 	}
-	else if (fmstate->p_nums != 2)
+	else /* DELETE */
 	{
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("table has incorrect number of columns")
-						));
+		/* or here ? */
 	}
 
 	/* 
 	 * all the checks have been done but no actual work done or connections made.
-	 * That makes this the right spot to return if w're doing explain only.
+	 * That makes this the right spot to return if we're doing explain only.
 	 */
 
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
@@ -1935,10 +2026,120 @@ redisExecForeignInsert(EState *estate,
 			sreply = redisCommand(context, "SADD %s %s",
 									  fmstate->keyset, keyval);
 		}
+	}
+	return slot;
+}
 
+static TupleTableSlot *
+redisExecForeignDelete(EState *estate,
+					   ResultRelInfo *rinfo,
+					   TupleTableSlot *slot,
+					   TupleTableSlot *planSlot)
+{
+	RedisFdwModifyState *fmstate = 
+		(RedisFdwModifyState *) rinfo->ri_FdwState;
+	redisContext *context = fmstate->context;
+	redisReply *reply = NULL;
+	bool isNull;
+	Datum datum;
+	char *keyval;
+
+    /* Get the key that was passed up as a resjunk column */
+    datum = ExecGetJunkAttribute(planSlot,
+                                 1,
+                                 &isNull);
+	
+	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
+
+	elog(NOTICE,"deleting keyval %s",keyval);
+
+	if (fmstate->singleton_key)
+	{
+		switch(fmstate->table_type)
+		{
+			case PG_REDIS_SCALAR_TABLE:
+				reply = redisCommand(context, "DEL %s",
+									  fmstate->singleton_key);
+				break;
+			case PG_REDIS_SET_TABLE:
+				reply = redisCommand(context, "SREM %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+#if 0
+			case PG_REDIS_LIST_TABLE:
+				/* removes ALL members with this value */
+				reply = redisCommand(context, "LREM %s 0 %s",
+									  fmstate->singleton_key, keyval);
+				break;
+#endif
+			case PG_REDIS_HASH_TABLE:
+				reply = redisCommand(context, "HDEL %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			case PG_REDIS_ZSET_TABLE:
+				reply = redisCommand(context, "ZREM %s %s",
+									  fmstate->singleton_key, keyval);
+				break;
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("delete not supported for this type of table")
+							));	
+		}	
+	}
+	else
+	{
+		/* use DEL regardless of table type */
+		reply = redisCommand(context, "DEL %s", keyval);
 	}
 
+	if(!reply)
+	{
+		redisFree(fmstate->context);
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+				 errmsg("failed delete key %s: %s", keyval, context->errstr)
+					));
+	}
 	
+	if (reply->type == REDIS_REPLY_ERROR)
+	{
+		char	   *err = pstrdup(reply->str);
+		
+		freeReplyObject(reply);
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 errmsg("failed to delete key %s: %s", keyval, err)
+					));
+	}
+
+	if (fmstate->keyset)
+	{
+		reply = redisCommand(context, "SREM %s %s",
+							 fmstate->keyset, keyval);
+
+		if(!reply)
+		{
+			redisFree(fmstate->context);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+					 errmsg("failed to delete keyset element %s : %s", 
+							keyval, context->errstr)
+						));
+		}
+		if (reply->type == REDIS_REPLY_ERROR)
+		{
+			char	   *err = pstrdup(reply->str);
+			
+			freeReplyObject(reply);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 errmsg("failed delete keyset element %s: %s", 
+							keyval, err)
+						));
+		}
+	}
+
 
 	return slot;
 }
