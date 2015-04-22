@@ -2193,7 +2193,26 @@ redisExecForeignUpdate(EState *estate,
 
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
 
-	elog(NOTICE,"updating keyval %s",keyval);
+    elog(NOTICE,"pnums = %d, keyAttno = %d, updating keyval %s",fmstate->p_nums, fmstate->keyAttno, keyval);
+    elog(NOTICE,"list length = %d",list_length(fmstate->target_attrs));
+
+    foreach(lc, fmstate->target_attrs)
+    {
+
+        char *setval;
+        int attnum = lfirst_int(lc);
+
+        int thisatt = attnum - 1;
+        // if (vars++ >= fmstate->p_nums - 1)
+        //    continue;
+
+        datum = slot_getattr(planSlot, attnum, &isnull);
+        setval = OutputFunctionCall(&fmstate->p_flinfo[thisatt], datum);
+
+        elog(NOTICE, "setting attribute %d to %s",attnum,setval);
+    }
+
+
 	return slot;
 }
 
