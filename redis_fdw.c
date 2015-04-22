@@ -2184,6 +2184,7 @@ redisExecForeignUpdate(EState *estate,
 		(RedisFdwModifyState *) rinfo->ri_FdwState;
 	Datum datum;
 	char *keyval;
+	bool  isNull;
 
     /* Get the key that was passed up as a resjunk column */
     datum = ExecGetJunkAttribute(planSlot,
