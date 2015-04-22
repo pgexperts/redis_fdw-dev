@@ -2208,7 +2208,7 @@ redisExecForeignUpdate(EState *estate,
         //    continue;
 
         datum = slot_getattr(planSlot, attnum, &isNull);
-        setval = OutputFunctionCall(&fmstate->p_flinfo[thisatt], datum);
+        setval = OutputFunctionCall(&fmstate->p_flinfo[attnum], datum);
 
         elog(NOTICE, "setting attribute %d to %s",attnum,setval);
     }
