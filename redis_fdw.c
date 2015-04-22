@@ -2179,6 +2179,20 @@ redisExecForeignUpdate(EState *estate,
 					   TupleTableSlot *slot,
 					   TupleTableSlot *planSlot)
 {
+
+	RedisFdwModifyState *fmstate = 
+		(RedisFdwModifyState *) rinfo->ri_FdwState;
+	Datum datum;
+	char *keyval;
+
+    /* Get the key that was passed up as a resjunk column */
+    datum = ExecGetJunkAttribute(planSlot,
+                                 fmstate->keyAttno,
+                                 &isNull);
+
+	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
+
+	elog(NOTICE,"updating keyval %s",keyval);
 	return slot;
 }
 
