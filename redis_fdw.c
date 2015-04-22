@@ -1561,7 +1561,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
                   0);
 
     /* Wrap it in a resjunk TLE with the right name ... */
-    attrname = NameStr(attr->attname);
+    attrname = REDISMODKEYNAME;
 
     tle = makeTargetEntry((Expr *) var,
                           list_length(parsetree->targetList) + 1,
@@ -1621,21 +1621,23 @@ redisPlanForeignModify(PlannerInfo *root,
 			col += FirstLowInvalidHeapAttributeNumber;
 			if (col <= InvalidAttrNumber) /* shouldn't happen */
 				elog(ERROR, "system-column update is not supported");
+#if 0
             /*
 			 * We also disallow updates to the first column
 			 */
 			if (col == 1) /* shouldn't happen */
 				elog(ERROR, "key column update is not supported");
+#endif
 			targetAttrs = lappend_int(targetAttrs, col);
 		}
 
         /* We also want the key column to be available for the update */
-		targetAttrs = lcons_int(1, targetAttrs);
+		// targetAttrs = lcons_int(1, targetAttrs);
 	}
 	else /* DELETE */
 	{
 		/* key of the row to delete */
-		targetAttrs = lcons_int(1, targetAttrs);
+		// targetAttrs = lcons_int(1, targetAttrs);
 	}
 
 	heap_close(rel, NoLock);
@@ -1661,6 +1663,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	Oid					typefnoid;
 	bool				isvarlena;
 	CmdType             op = mtstate->operation;
+	int                 n_attrs;
 
 #ifdef DEBUG
 	elog(NOTICE, "BeginForeignModify");
@@ -1692,20 +1695,37 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	fmstate->table_type = table_options.table_type;
 	fmstate->target_attrs = (List *) list_nth(fdw_private, 0);
 
-	fmstate->p_flinfo = (FmgrInfo *) palloc0(
-											 sizeof(FmgrInfo) * list_length(fmstate->target_attrs));
+	n_attrs = list_length(fmstate->target_attrs);
+	fmstate->p_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * (n_attrs+1));
 
 	fmstate->p_nums = 0;
 
+    if (op == CMD_UPDATE || op == CMD_DELETE)
+    {
+        Plan *subplan = mtstate->mt_plans[subplan_index]->plan;
+        Form_pg_attribute attr = RelationGetDescr(rel)->attrs[0]; /* key is first */
 
-	foreach(lc, fmstate->target_attrs)
-	{
-		int attnum = lfirst_int(lc);
-		Form_pg_attribute attr = RelationGetDescr(rel)->attrs[attnum - 1];
+        fmstate->keyAttno = ExecFindJunkAttributeInTlist(subplan->targetlist,
+            REDISMODKEYNAME);
 
-		getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
-		fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
-		fmstate->p_nums++;
+        getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
+        fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
+        fmstate->p_nums++;
+
+    }
+
+    if (op == CMD_UPDATE || op == CMD_INSERT)
+    {
+
+		foreach(lc, fmstate->target_attrs)
+		{
+			int attnum = lfirst_int(lc);
+			Form_pg_attribute attr = RelationGetDescr(rel)->attrs[attnum - 1];
+			
+			getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
+			fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
+			fmstate->p_nums++;
+		}
 	}
 
 	/* 
