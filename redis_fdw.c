@@ -16,7 +16,7 @@
  */
 
 /* Debug mode */
-/* #define DEBUG */
+#define DEBUG
 
 #include "postgres.h"
 
@@ -163,6 +163,7 @@ typedef struct RedisFdwModifyState
 	redis_table_type table_type;
 	List			   *target_attrs;
 	int					p_nums;
+    int                 keyAttno;
 	FmgrInfo		   *p_flinfo;
 }	RedisFdwModifyState;
 
@@ -223,6 +224,10 @@ static TupleTableSlot *redisExecForeignDelete(EState *estate,
 											  ResultRelInfo *rinfo,
 											  TupleTableSlot *slot,
 											  TupleTableSlot *planSlot);
+static TupleTableSlot *redisExecForeignUpdate(EState *estate,
+											  ResultRelInfo *rinfo,
+											  TupleTableSlot *slot,
+											  TupleTableSlot *planSlot);
 
 /*
  * Helper functions
@@ -231,6 +236,9 @@ static bool redisIsValidOption(const char *option, Oid context);
 static void redisGetOptions(Oid foreigntableid, RedisTableOptions options); 
 static void redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *pushdown);
 static char *process_redis_array(redisReply *reply,	redis_table_type type);
+
+#define REDISMODKEYNAME "redis_mod_key_name"
+
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
  * to my callback routines.
@@ -260,6 +268,7 @@ redis_fdw_handler(PG_FUNCTION_ARGS)
     fdwroutine->ExecForeignInsert = redisExecForeignInsert; /* I */
     fdwroutine->EndForeignModify = redisEndForeignModify; /* I U D */
 
+	fdwroutine->ExecForeignUpdate = redisExecForeignUpdate; /* U */
 	fdwroutine->ExecForeignDelete = redisExecForeignDelete; /* D */
     fdwroutine->AddForeignUpdateTargets = redisAddForeignUpdateTargets;/* U D */
  
@@ -2143,6 +2152,16 @@ redisExecForeignDelete(EState *estate,
 
 	return slot;
 }
+
+static TupleTableSlot *
+redisExecForeignUpdate(EState *estate,
+					   ResultRelInfo *rinfo,
+					   TupleTableSlot *slot,
+					   TupleTableSlot *planSlot)
+{
+	return slot;
+}
+
 
 static void
 redisEndForeignModify(EState *estate,
