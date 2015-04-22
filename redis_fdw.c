@@ -2186,6 +2186,7 @@ redisExecForeignUpdate(EState *estate,
 	char *keyval;
 	bool  isNull;
 	ListCell *lc = NULL;
+	int flslot = 1;
 
     /* Get the key that was passed up as a resjunk column */
     datum = ExecGetJunkAttribute(planSlot,
@@ -2203,12 +2204,8 @@ redisExecForeignUpdate(EState *estate,
         char *setval;
         int attnum = lfirst_int(lc);
 
-        int thisatt = attnum - 1;
-        // if (vars++ >= fmstate->p_nums - 1)
-        //    continue;
-
         datum = slot_getattr(planSlot, attnum, &isNull);
-        setval = OutputFunctionCall(&fmstate->p_flinfo[attnum], datum);
+        setval = OutputFunctionCall(&fmstate->p_flinfo[flslot++], datum);
 
         elog(NOTICE, "setting attribute %d to %s",attnum,setval);
     }
