@@ -2075,7 +2075,7 @@ redisExecForeignDelete(EState *estate,
 
     /* Get the key that was passed up as a resjunk column */
     datum = ExecGetJunkAttribute(planSlot,
-                                 1,
+                                 fmstate->keyAttno,
                                  &isNull);
 	
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
