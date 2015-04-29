@@ -162,6 +162,7 @@ typedef struct RedisFdwModifyState
 	Relation			rel;
 	redis_table_type table_type;
 	List			   *target_attrs;
+	int                *targetDims;
 	int					p_nums;
     int                 keyAttno;
 	FmgrInfo		   *p_flinfo;
@@ -1560,7 +1561,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
                   InvalidOid,
                   0);
 
-    /* Wrap it in a resjunk TLE with the right name ... */
+    /* Wrap it in a resjunk TLE with a made up name ... */
     attrname = REDISMODKEYNAME;
 
     tle = makeTargetEntry((Expr *) var,
@@ -1583,8 +1584,7 @@ redisPlanForeignModify(PlannerInfo *root,
 	RangeTblEntry  *rte = planner_rt_fetch(resultRelation, root);
 	Relation		rel;
 	List		   *targetAttrs = NIL;
-	TupleDesc	tupdesc;
-
+	TupleDesc	    tupdesc;
 
 	/*
 	 * RETURNING list not supported
@@ -1621,24 +1621,13 @@ redisPlanForeignModify(PlannerInfo *root,
 			col += FirstLowInvalidHeapAttributeNumber;
 			if (col <= InvalidAttrNumber) /* shouldn't happen */
 				elog(ERROR, "system-column update is not supported");
-#if 0
-            /*
-			 * We also disallow updates to the first column
-			 */
-			if (col == 1) /* shouldn't happen */
-				elog(ERROR, "key column update is not supported");
-#endif
+
 			targetAttrs = lappend_int(targetAttrs, col);
 		}
 
-        /* We also want the key column to be available for the update */
-		// targetAttrs = lcons_int(1, targetAttrs);
-	}
-	else /* DELETE */
-	{
-		/* key of the row to delete */
-		// targetAttrs = lcons_int(1, targetAttrs);
-	}
+ 	}
+	
+	/* nothing extra needed for DELETE - all it needs is the resjunk column */
 
 	heap_close(rel, NoLock);
 
@@ -1697,6 +1686,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 
 	n_attrs = list_length(fmstate->target_attrs);
 	fmstate->p_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * (n_attrs+1));
+	fmstate->targetDims = (int *) palloc0(sizeof(int) * (n_attrs+1));
 
 	fmstate->p_nums = 0;
 
@@ -1717,6 +1707,8 @@ redisBeginForeignModify(ModifyTableState *mtstate,
     if (op == CMD_UPDATE || op == CMD_INSERT)
     {
 
+		fmstate->targetDims = (int *) palloc0(sizeof(int) * (n_attrs+1));
+
 		foreach(lc, fmstate->target_attrs)
 		{
 			int attnum = lfirst_int(lc);
@@ -1724,6 +1716,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 			
 			getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
 			fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
+			fmstate->targetDims[fmstate->p_nums] = attr->attndims;
 			fmstate->p_nums++;
 		}
 	}
@@ -2203,11 +2196,22 @@ redisExecForeignUpdate(EState *estate,
 
         char *setval;
         int attnum = lfirst_int(lc);
+		int ndims;
 
         datum = slot_getattr(planSlot, attnum, &isNull);
-        setval = OutputFunctionCall(&fmstate->p_flinfo[flslot++], datum);
 
-        elog(NOTICE, "setting attribute %d to %s",attnum,setval);
+		if (isNull)
+			elog(ERROR,"NULL update not supported");
+
+        setval = OutputFunctionCall(&fmstate->p_flinfo[flslot], datum);
+		ndims = fmstate->targetDims[flslot++];
+
+        elog(NOTICE, "setting attribute %d[%d] to %s",attnum,ndims,setval);
+
+		/* most non-singleton table types require an array, not text as value */
+		if (attnum > 1 && ndims == 0 && !fmstate->singleton_key && 
+			fmstate->table_type != PG_REDIS_SCALAR_TABLE)
+			elog(ERROR,"update not supported for this type of table");
     }
 
 
