@@ -736,7 +736,8 @@ redisGetForeignPlan(PlannerInfo *root,
 							scan_clauses,
 							scan_relid,
 							NIL,	/* no expressions to evaluate */
-							NIL);		/* no private state either */
+							NIL,	/* no private state either */
+							NIL);   /* no custom tlist */
 }
 
 /*
