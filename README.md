@@ -39,7 +39,8 @@ Neither of us have tested on Windows, but the code should be good on MinGW.
 Limitations
 -----------
 
-- There's no such thing as a cursor in Redis, or MVCC, which leaves us
+- There's no such thing as a cursor in Redis in the SQL sense,
+  nor MVCC, which leaves us
   with no way to atomically query the database for the available keys
   and then fetch each value. So, we get a list of keys to begin with,
   and then fetch whatever records still exist as we build the tuples.
@@ -49,6 +50,22 @@ Limitations
 
 - There is no support for non-scalar datatypes in Redis
   such as lists, for PostgreSQL 9.1. There is such support for later releases.
+
+- Redis has acquired cursors as of Release 2.8. This is used in all the
+  mainline branches from REL9_2_STABLE on, for operations which would otherwise
+  either scan the entire Redis database in a single sweep, or scan a single,
+  possible large, keyset in a single sweep. Redis Releases prior to 2.8 are
+  maintained on the REL9_x_STABLE_pre2.8 branches.
+
+- Redis cursors have some significant limitations. The Redis docs say:
+
+    A given element may be returned multiple times. It is up to the
+    application to handle the case of duplicated elements, for example only
+    using the returned elements in order to perform operations that are safe
+    when re-applied multiple times.
+
+  The FDW makes no attempt to detect this situation. Users should be aware of
+  the possibility.
 
 Usage
 -----
@@ -79,16 +96,17 @@ database:	The numeric ID of the Redis database to query.
 named object.
 	    Default: none, meaning don't just use a single object.
 
-You can only have one of tablekeyset and tablekeyprefix, and if you use singleton_key you
-can't have either.
+You can only have one of tablekeyset and tablekeyprefix, and if you use
+singleton_key you can't have either.
 
 Structured items are returned as array text, or, if the value column is a
 text array as an array of values. In the case of hash objects this array is
 an array of key, value, key, value ...
 
-Singleton key tables are returned as rows with a single column of text in the case of lists
-sets and scalars, rows with key and value text columns for hashes, and rows with a value text
-columns and an optional numeric score column for zsets.
+Singleton key tables are returned as rows with a single column of text
+in the case of lists sets and scalars, rows with key and value text columns
+for hashes, and rows with a value text columns and an optional numeric score
+column for zsets.
 
 The following parameter can be set on a user mapping for a Redis
 foreign server:
