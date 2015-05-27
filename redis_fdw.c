@@ -1,3 +1,4 @@
+
 /*-------------------------------------------------------------------------
  *
  *		  foreign-data wrapper for Redis
@@ -144,9 +145,9 @@ typedef struct RedisFdwExecutionState
 	char       *qual_value;
 	char       *singleton_key;
 	redis_table_type table_type;
+	char       *cursor_search_string;
+	char       *cursor_id;
 }	RedisFdwExecutionState;
-
-#define REDISJUNKATTNAME "redis_mod_key"
 
 typedef struct RedisFdwModifyState
 {
@@ -167,6 +168,11 @@ typedef struct RedisFdwModifyState
     int                 keyAttno;
 	FmgrInfo		   *p_flinfo;
 }	RedisFdwModifyState;
+
+/* initial cursor */
+#define ZERO "0"
+/* redis default is 10 - let's fetch 1000 at a time */
+#define COUNT " COUNT 1000"
 
 /*
  * SQL functions
@@ -238,7 +244,11 @@ static void redisGetOptions(Oid foreigntableid, RedisTableOptions options);
 static void redisGetQual(Node *node, TupleDesc tupdesc, char **key, char **value, bool *pushdown);
 static char *process_redis_array(redisReply *reply,	redis_table_type type);
 
-#define REDISMODKEYNAME "redis_mod_key_name"
+/* 
+ * Name we will use for the junk attribute that holds the redis key
+ * for update and delete operations.
+ */
+#define REDISMODKEYNAME "__redis_mod_key_name"
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -699,7 +709,6 @@ redisGetForeignRelSize(PlannerInfo *root,
 			default:
 				;
 		}
-
 	}
 	else if (table_options.keyset)
 	{ 
@@ -805,7 +814,8 @@ redisGetForeignPlan(PlannerInfo *root,
 							scan_clauses,
 							scan_relid,
 							NIL,	/* no expressions to evaluate */
-							NIL);		/* no private state either */
+							NIL,	/* no private state either */
+							NIL);   /* no custom tlist */
 }
 
 /*
@@ -989,6 +999,8 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	festate->keyset = table_options.keyset;
 	festate->singleton_key = table_options.singleton_key;
 	festate->table_type = table_options.table_type;
+	festate->cursor_id = NULL;
+	festate->cursor_search_string = NULL;
 	
 	festate->qual_value = pushdown ? qual_value : NULL;
 
@@ -999,6 +1011,16 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	/* Execute the query */
 	if (festate->singleton_key)
 	{
+
+	  /*
+	   * We're not using cursors for now for singleton key tables.
+	   * The theory is that we don't expect them to be so large
+	   * in normal use that we would get any significant benefit from
+	   * doing so, and in any case scanning them in a single step is not
+	   * going to tie things up like scannoing the whole Redis database
+	   * could.
+	   */
+
 		switch (table_options.table_type)
 		{
 			case PG_REDIS_SCALAR_TABLE:
@@ -1068,22 +1090,37 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 				festate->row = -1;
 		}
 
-		reply = redisCommand(context, "KEYS %s", qual_value);
+		/*
+		 * For a qual we don't want to scan at all,
+		 * just check that the key exists. We do this
+		 * check in adddition to the keyset/keyprefix checks,
+		 * is any, so we know the item is really there.
+		 */
+
+		reply = redisCommand(context,"EXISTS %s",qual_value);
+		if (reply->integer == 0)
+			festate->row = -1;
+
 	}
 	else
 	{
-		/* no qual */
+		/* no qual - do a cursor scan */
 		if (festate->keyset)
 		{
-			reply = redisCommand(context, "SMEMBERS %s", festate->keyset);
+			festate->cursor_search_string = "SSCAN %s %s" COUNT;
+			reply = redisCommand(context, festate->cursor_search_string,
+								 festate->keyset, ZERO);
 		}
 		else if (festate->keyprefix)
 		{
-			reply = redisCommand(context, "KEYS %s*", festate->keyprefix);
+			festate->cursor_search_string = "SCAN %s MATCH %s*" COUNT;
+			reply = redisCommand(context, festate->cursor_search_string,
+								 ZERO, festate->keyprefix);
 		}
 		else
 		{
-			reply = redisCommand(context, "KEYS *");
+			festate->cursor_search_string = "SCAN %s" COUNT;
+			reply = redisCommand(context, festate->cursor_search_string, ZERO);
 		}
 	}
 
@@ -1109,7 +1146,33 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	/* Store the additional state info */
 	festate->attinmeta = 
 		TupleDescGetAttInMetadata(node->ss.ss_currentRelation->rd_att);
-	festate->reply = reply;
+
+	if (festate->singleton_key)
+	{
+		festate->reply = reply;
+	}
+	else if (festate->row > -1 && festate->qual_value == NULL)
+	{
+		redisReply *cursor = reply->element[0];
+
+		if (cursor->type == REDIS_REPLY_STRING)
+		{
+			if (cursor->len == 1 && cursor->str[0] == '0')
+				festate->cursor_id = NULL;
+			else
+				festate->cursor_id = pstrdup(cursor->str);
+		}
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 errmsg("wrong reply type %d", cursor->type)
+						));
+		}
+
+		/* for cursors, this is the list of elements */
+		festate->reply = reply->element[1];
+	}
 }
 
 /*
@@ -1154,8 +1217,86 @@ redisIterateForeignScanMulti(ForeignScanState *node)
 	/* Get the next record, and set found */
 	found = false;
 
-	/* -1 means we failed the qual test, so there are no rows */
-	if (festate->row >  -1 && festate->row < festate->reply->elements)
+	/*
+	 * If we're out of rows on the cursor, fetch the next set.
+	 * Keep going until we get a result back that actually has some rows.
+	 */
+	while (festate->cursor_id != NULL &&
+		   festate->row >= festate->reply->elements)
+	{
+		redisReply *creply;
+		redisReply *cursor;
+
+		Assert(festate->qual_value == NULL);
+
+		if (festate->keyset)
+		{
+			creply = redisCommand(festate->context,
+								  festate->cursor_search_string,
+								  festate->keyset, festate->cursor_id);
+		}
+		else if (festate->keyprefix)
+		{
+			creply = redisCommand(festate->context,
+								  festate->cursor_search_string,
+								  festate->cursor_id, festate->keyprefix);
+		}
+		else
+		{
+			creply = redisCommand(festate->context,
+								  festate->cursor_search_string,
+								  festate->cursor_id);
+		}
+
+		if (!creply)
+		{
+			redisFree(festate->context);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
+					 errmsg("failed to list keys: %s",
+							festate->context->errstr)
+						));
+		}
+		else if (creply->type == REDIS_REPLY_ERROR)
+		{
+			char	   *err = pstrdup(creply->str);
+
+			freeReplyObject(creply);
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 errmsg("failed somehow: %s", err)
+						));
+		}
+
+		cursor  = creply->element[0];
+
+		if (cursor->type == REDIS_REPLY_STRING)
+		{
+			if (cursor->len == 1 && cursor->str[0] == '0')
+				festate->cursor_id = NULL;
+			else
+				festate->cursor_id = pstrdup(cursor->str);
+		}
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 errmsg("wrong reply type %d", cursor->type)
+						));
+		}
+
+		festate->reply = creply->element[1];
+		festate->row = 0;
+	}
+
+	/*
+	 * -1 means we failed the qual test, so there are no rows
+	 * or we've already processed the qual
+	 */
+
+	if (festate->row >  -1 &&
+		(festate->qual_value != NULL ||
+		 (festate->row < festate->reply->elements)))
 	{
 		/*
 		 * Get the row, check the result type, and handle accordingly. If it's
@@ -1163,7 +1304,10 @@ redisIterateForeignScanMulti(ForeignScanState *node)
 		 */
 		do
 		{
-			key = festate->reply->element[festate->row]->str;
+
+			key = festate->qual_value != NULL ?
+				festate->qual_value :
+				festate->reply->element[festate->row]->str;
 			switch(festate->table_type)
 			{
 				case PG_REDIS_HASH_TABLE:
@@ -1193,7 +1337,8 @@ redisIterateForeignScanMulti(ForeignScanState *node)
 				freeReplyObject(festate->reply);
 				redisFree(festate->context);
 				ereport(ERROR, (errcode(ERRCODE_FDW_UNABLE_TO_CREATE_REPLY),
-								errmsg("failed to get the value for key \"%s\": %s", key, festate->context->errstr)
+								errmsg("failed to get the value for key \"%s\": %s",
+									   key, festate->context->errstr)
 								));
 			}
 
@@ -1202,17 +1347,15 @@ redisIterateForeignScanMulti(ForeignScanState *node)
 		} while ((reply->type == REDIS_REPLY_NIL ||
 				  reply->type == REDIS_REPLY_STATUS ||
 				  reply->type == REDIS_REPLY_ERROR) &&
+				 festate->qual_value == NULL &&
 				 festate->row < festate->reply->elements);
 
-		if (festate->row <= festate->reply->elements)
+		if (festate->qual_value != NULL || festate->row <= festate->reply->elements)
 		{
 			/*
 			 * Now, deal with the different data types we might have got from
 			 * Redis.
-			 
 			 */
-
-			
 
 			switch (reply->type)
 			{
@@ -1234,13 +1377,15 @@ redisIterateForeignScanMulti(ForeignScanState *node)
 			}
 		}
 
+		/* make sure we don't try to process the qual row twice */
+		if (festate->qual_value != NULL)
+			festate->row = -1;
 	}
 
 	/* Build the tuple */
-	values = (char **) palloc(sizeof(char *) * 2);
-
 	if (found)
 	{
+		values = (char **) palloc(sizeof(char *) * 2);
 		values[0] = key;
 		values[1] = data;
 		tuple = BuildTupleFromCStrings(festate->attinmeta, values);
