@@ -17,7 +17,7 @@
  */
 
 /* Debug mode */
-#define DEBUG
+/* #define DEBUG */
 
 #include "postgres.h"
 
@@ -48,6 +48,7 @@
 #include "mb/pg_wchar.h"
 #include "nodes/relation.h"
 #include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
@@ -166,6 +167,7 @@ typedef struct RedisFdwModifyState
 	int                *targetDims;
 	int					p_nums;
     int                 keyAttno;
+	Oid                 array_elem_type;
 	FmgrInfo		   *p_flinfo;
 }	RedisFdwModifyState;
 
@@ -579,6 +581,7 @@ redisGetOptions(Oid foreigntableid,RedisTableOptions table_options)
 				table_options->table_type = PG_REDIS_SET_TABLE;
 			else if (strcmp(typeval,"zset") == 0)
 				table_options->table_type = PG_REDIS_ZSET_TABLE;
+			/* XXX detect error here */
 		}
 	}
 
@@ -1686,7 +1689,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
     const char *attrname;
     TargetEntry *tle;
 
-	/* XXX assumes for the moment that this isn't attisdropped */
+	/* assumes that this isn't attisdropped */
 	Form_pg_attribute attr =
 				RelationGetDescr(target_relation)->attrs[0];
 
@@ -1729,7 +1732,9 @@ redisPlanForeignModify(PlannerInfo *root,
 	RangeTblEntry  *rte = planner_rt_fetch(resultRelation, root);
 	Relation		rel;
 	List		   *targetAttrs = NIL;
+	List           *array_elem_list = NIL;
 	TupleDesc	    tupdesc;
+	Oid             array_element_type = InvalidOid;
 
 	/*
 	 * RETURNING list not supported
@@ -1739,6 +1744,15 @@ redisPlanForeignModify(PlannerInfo *root,
 
 	rel = heap_open(rte->relid, NoLock);
 	tupdesc = RelationGetDescr(rel);
+
+	/* if the second attribute exists and it's an array, get the element type */
+	if (tupdesc->natts > 1)
+	{
+		Form_pg_attribute attr = tupdesc->attrs[1];
+		array_element_type = get_element_type(attr->atttypid);
+	}
+
+	array_elem_list = lappend_oid(array_elem_list, array_element_type);
 
 
 	if (operation == CMD_INSERT)
@@ -1758,7 +1772,9 @@ redisPlanForeignModify(PlannerInfo *root,
 	{
 
 		/* code borrowed from mysql fdw */
-		Bitmapset *tmpset = bms_copy(rte->modifiedCols);
+
+		/* modifiedCols in pg < 9.5 */
+		Bitmapset *tmpset = bms_copy(rte->updatedCols);
 		AttrNumber col;
 
 		while ((col = bms_first_member(tmpset)) >= 0)
@@ -1776,7 +1792,7 @@ redisPlanForeignModify(PlannerInfo *root,
 
 	heap_close(rel, NoLock);
 
-	return list_make1(targetAttrs);
+	return list_make2(targetAttrs, array_elem_list);
 }
 
 static void
@@ -1798,6 +1814,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	bool				isvarlena;
 	CmdType             op = mtstate->operation;
 	int                 n_attrs;
+	List               *array_elem_list;
 
 #ifdef DEBUG
 	elog(NOTICE, "BeginForeignModify");
@@ -1833,6 +1850,9 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	fmstate->p_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * (n_attrs+1));
 	fmstate->targetDims = (int *) palloc0(sizeof(int) * (n_attrs+1));
 
+	array_elem_list = (List *) list_nth(fdw_private, 1);
+	fmstate->array_elem_type = list_nth_oid(array_elem_list, 0);
+
 	fmstate->p_nums = 0;
 
     if (op == CMD_UPDATE || op == CMD_DELETE)
@@ -1858,10 +1878,15 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 		{
 			int attnum = lfirst_int(lc);
 			Form_pg_attribute attr = RelationGetDescr(rel)->attrs[attnum - 1];
+			Oid elem = attr->attndims ? get_element_type(attr->atttypid) : attr->atttypid;
 			
-			getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
-			fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
+			/*
+			 * if the item is an array, store the output details for its element type,
+			 * otherwise for the actual type. This saves us doing lookups later on.
+			 */
 			fmstate->targetDims[fmstate->p_nums] = attr->attndims;
+			getTypeOutputInfo(elem, &typefnoid, &isvarlena);
+			fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
 			fmstate->p_nums++;
 		}
 	}
@@ -1884,9 +1909,10 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 			else if (fmstate->p_nums != ((table_options.table_type == PG_REDIS_HASH_TABLE || table_options.table_type == PG_REDIS_ZSET_TABLE) ? 2 : 1))
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("table has incorrect number of columns")
+						 errmsg("table has incorrect number of columns: %d for type %d",fmstate->p_nums, table_options.table_type)
 							));
 		}
+/*
 		else if (table_options.table_type == PG_REDIS_ZSET_TABLE)
 		{
 			ereport(ERROR,
@@ -1894,6 +1920,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 					 errmsg("operation on zset table is not supported")
 						));
 		}
+*/
 		else if (fmstate->p_nums != 2)
 		{
 				ereport(ERROR,
@@ -1979,6 +2006,40 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 
 }
 
+static void
+check_reply(redisReply *reply, redisContext *context, int error_code, char *message, char *arg)
+{
+	char	   *err;
+	char       *xmessage;
+
+	if (!reply)
+	{
+		err = pstrdup(context->errstr);
+		redisFree(context);
+	}
+	else if (reply->type == REDIS_REPLY_ERROR)
+	{
+		err = pstrdup(reply->str);
+	}
+	else
+		return;
+
+	xmessage = palloc(strlen(message) + 5);
+	strncpy(xmessage, message, strlen(message)+1);
+	strcat(xmessage," %s");
+
+	if (arg != NULL)
+		ereport(ERROR,
+				(errcode(error_code),
+				 errmsg(xmessage, arg, err)
+					));
+	else
+		ereport(ERROR,
+				(errcode(error_code),
+				 errmsg(xmessage, err)
+					));
+}
+
 static TupleTableSlot *
 redisExecForeignInsert(EState *estate,
 					   ResultRelInfo *rinfo,
@@ -1993,6 +2054,7 @@ redisExecForeignInsert(EState *estate,
 	bool isnull;
 	Datum key;
 	char *keyval;
+	char *extraval = ""; /* hash value or zset priority */
 	
 	key = slot_getattr(slot, 1, &isnull);
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], key);
@@ -2001,18 +2063,17 @@ redisExecForeignInsert(EState *estate,
 	{
 
 		char *rkeyval;
-		char *extraval = ""; /* hash value or zset priority */
 
 		if (fmstate->table_type ==  PG_REDIS_SCALAR_TABLE)
 			rkeyval = fmstate->singleton_key;
 		else
 			rkeyval = keyval;
 	
-		/* check if key is there using EXISTS / HEXISTS / SISMEMBER / ZRANK */
-		/* not an error for a list type singleton - they don't have to be unique */
-
-
-		elog(NOTICE,"singleton table %s, keyval %s",fmstate->singleton_key,keyval);
+		/*
+		 * Check if key is there using EXISTS / HEXISTS / SISMEMBER / ZRANK
+		 * It is not an error for a list type singleton as they don't have
+		 * to be unique
+		 */
 
 
 		switch(fmstate->table_type)
@@ -2082,7 +2143,8 @@ redisExecForeignInsert(EState *estate,
 
 		/* get the second value for appropriate table types */
 
-		if (fmstate->table_type == PG_REDIS_ZSET_TABLE || fmstate->table_type == PG_REDIS_HASH_TABLE)
+		if (fmstate->table_type == PG_REDIS_ZSET_TABLE ||
+			fmstate->table_type == PG_REDIS_HASH_TABLE)
 		{
 			Datum extra;
 			
@@ -2119,6 +2181,8 @@ redisExecForeignInsert(EState *estate,
 						 errmsg("insert not supported for this type of table")
 							));
 		}
+
+		/* XXX error check sreply here */
 		
 	}
 	else
@@ -2126,9 +2190,46 @@ redisExecForeignInsert(EState *estate,
 		/* 
 		 * not a singleton key table
 		 *
-		 * First, check if key is there using EXISTS 
 		 */
 
+		Datum value;
+		char *valueval = NULL;
+		int         nitems;
+		Datum      *elements;
+		bool       *nulls;
+		int16       typlen;
+		bool        typbyval;
+		char        typalign;
+
+		bool is_array = fmstate->array_elem_type != InvalidOid;
+
+		value = slot_getattr(slot, 2, &isnull);
+
+		if (isnull)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot insert NULL into a Redis table")
+						));
+
+		if (is_array && fmstate->table_type == PG_REDIS_SCALAR_TABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot insert array into into a Redis scalar table")
+						));
+		else if (!is_array && fmstate->table_type != PG_REDIS_SCALAR_TABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot insert into this type of Redis table - needs an array")
+						));
+
+		/* make sure the key has the right prefix, if any */
+		if (fmstate->keyprefix && strncmp(keyval, fmstate->keyprefix, strlen(fmstate->keyprefix)) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("key '%s' does not match table key prefix '%s'", keyval, fmstate->keyprefix)
+						));
+
+		/* Check if key is there using EXISTS  */
 		sreply = redisCommand(context, "EXISTS %s", /* 1 or 0 */
 							  keyval);
 		if(!sreply)
@@ -2161,24 +2262,89 @@ redisExecForeignInsert(EState *estate,
 
 		freeReplyObject(sreply);
 
-		/* if OK add values using SET / HMSET / SADD / ZADD / RPUSH */
+		/* if OK add values using SET / HSET / SADD / ZADD / RPUSH */
+
+		if (fmstate->table_type == PG_REDIS_SCALAR_TABLE)
+		{
+			/* everything else will be an array */
+			valueval = OutputFunctionCall(&fmstate->p_flinfo[1], value);
+		}
+		else
+		{
+			int i;
+
+			get_typlenbyvalalign(fmstate->array_elem_type,
+								 &typlen, &typbyval, &typalign);
+
+			deconstruct_array(DatumGetArrayTypeP(value),
+							  fmstate->array_elem_type, typlen, typbyval,
+							  typalign, &elements, &nulls,
+							  &nitems);
+
+			for (i = 0;  i < nitems; i++)
+			{
+				if (nulls[i])
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot insert NULL into a Redis table")
+								));
+			}
+		}
 
 		switch(fmstate->table_type)
 		{
-#if 0
 			case PG_REDIS_SCALAR_TABLE:
 				sreply = redisCommand(context, "SET %s %s",
-									  fmstate->singleton_key, keyval);
+									  keyval, valueval);
 				break;
 			case PG_REDIS_SET_TABLE:
-				sreply = redisCommand(context, "SADD %s %s",
-									  fmstate->singleton_key, keyval);
+				{
+					int i;
+
+					for (i = 0; i < nitems; i++)
+					{
+						valueval = OutputFunctionCall(&fmstate->p_flinfo[1], elements[i]);
+						sreply = redisCommand(context, "SADD %s %s",
+											  keyval, valueval);
+						check_reply(sreply, context, ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION,
+									"could not add key %s", valueval);
+					}
+				}
+				break;
+			case PG_REDIS_HASH_TABLE:
+				{
+					int i;
+					char *hk, *hv;
+
+					for (i = 0; i < nitems; i+=2)
+					{
+						hk = OutputFunctionCall(&fmstate->p_flinfo[1], elements[i]);
+						hv = OutputFunctionCall(&fmstate->p_flinfo[1], elements[i+1]);
+						sreply = redisCommand(context, "HSET %s %s %s",
+											  keyval, hk, hv);
+						check_reply(sreply, context, ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION,
+									"could not add key %s", hk);
+					}
+				}
 				break;
 			case PG_REDIS_LIST_TABLE:
-				sreply = redisCommand(context, "RPUSH %s %s",
-									  fmstate->singleton_key, keyval);
+				{
+					int i;
+
+					for (i = 0; i < nitems; i++)
+					{
+						valueval = OutputFunctionCall(&fmstate->p_flinfo[1], elements[i]);
+						sprintf(ibuff,"%d",i);
+						/* score comes BEFORE value in ZADD, which seems slightly perverse */
+						sreply = redisCommand(context, "ZADD %s %s %s",
+											  keyval, ibuff, valueval);
+						check_reply(sreply, context, ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION,
+									"could not add key %s", valueval);
+					}
+				}
+				sreply = redisCommand(context, "ZADD %s %s %s",
+									  keyval, extraval, valueval);
 				break;
-#endif				
 			default:
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -2186,12 +2352,15 @@ redisExecForeignInsert(EState *estate,
 							));
 		}
 
+		/* XXX error check sreply here */
+
 		/* if it's a keyset organized table, add key to keyset using SADD */
 
 		if (fmstate->keyset)
 		{
 			sreply = redisCommand(context, "SADD %s %s",
 									  fmstate->keyset, keyval);
+			/* XXX error check sreply here */
 		}
 	}
 	return slot;
@@ -2218,7 +2387,7 @@ redisExecForeignDelete(EState *estate,
 	
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
 
-	elog(NOTICE,"deleting keyval %s",keyval);
+	// elog(NOTICE,"deleting keyval %s",keyval);
 
 	if (fmstate->singleton_key)
 	{
@@ -2232,13 +2401,15 @@ redisExecForeignDelete(EState *estate,
 				reply = redisCommand(context, "SREM %s %s",
 									  fmstate->singleton_key, keyval);
 				break;
-#if 0
 			case PG_REDIS_LIST_TABLE:
-				/* removes ALL members with this value */
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot delete from a List type Singleton Key Redis table")
+							));
+				/* here's why - this removes ALL members with this value */
 				reply = redisCommand(context, "LREM %s 0 %s",
 									  fmstate->singleton_key, keyval);
 				break;
-#endif
 			case PG_REDIS_HASH_TABLE:
 				reply = redisCommand(context, "HDEL %s %s",
 									  fmstate->singleton_key, keyval);
@@ -2290,7 +2461,7 @@ redisExecForeignDelete(EState *estate,
 			redisFree(fmstate->context);
 			ereport(ERROR,
 					(errcode(ERRCODE_FDW_UNABLE_TO_CREATE_EXECUTION),
-					 errmsg("failed to delete keyset element %s : %s", 
+					 errmsg("failed to delete keyset element %s : %s",
 							keyval, context->errstr)
 						));
 		}
@@ -2301,12 +2472,11 @@ redisExecForeignDelete(EState *estate,
 			freeReplyObject(reply);
 			ereport(ERROR,
 					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
-					 errmsg("failed delete keyset element %s: %s", 
+					 errmsg("failed to delete keyset element %s: %s",
 							keyval, err)
 						));
 		}
 	}
-
 
 	return slot;
 }
@@ -2333,8 +2503,11 @@ redisExecForeignUpdate(EState *estate,
 
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], datum);
 
-    elog(NOTICE,"pnums = %d, keyAttno = %d, updating keyval %s",fmstate->p_nums, fmstate->keyAttno, keyval);
-    elog(NOTICE,"list length = %d",list_length(fmstate->target_attrs));
+	if (keyval == NULL)
+		;
+
+	// elog(NOTICE,"pnums = %d, keyAttno = %d, updating keyval %s",fmstate->p_nums, fmstate->keyAttno, keyval);
+	// elog(NOTICE,"list length = %d",list_length(fmstate->target_attrs));
 
     foreach(lc, fmstate->target_attrs)
     {
@@ -2351,7 +2524,10 @@ redisExecForeignUpdate(EState *estate,
         setval = OutputFunctionCall(&fmstate->p_flinfo[flslot], datum);
 		ndims = fmstate->targetDims[flslot++];
 
-        elog(NOTICE, "setting attribute %d[%d] to %s",attnum,ndims,setval);
+		if (setval == NULL)
+			;
+
+		// elog(NOTICE, "setting attribute %d[%d] to %s",attnum,ndims,setval);
 
 		/* most non-singleton table types require an array, not text as value */
 		if (attnum > 1 && ndims == 0 && !fmstate->singleton_key && 
