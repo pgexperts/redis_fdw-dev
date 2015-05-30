@@ -251,6 +251,10 @@ delete from db15_w_1key_scalar where val = 'not only row';
 
 select * from db15_w_1key_scalar;
 
+update db15_w_1key_scalar set val = 'new scalar val';
+
+select * from db15_w_1key_scalar;
+
 delete from db15_w_1key_scalar;
 
 select * from db15_w_1key_scalar;
@@ -272,6 +276,18 @@ insert into db15_w_1key_hash values ('a','b');
 delete from db15_w_1key_hash where key = 'a';
 
 delete from db15_w_1key_hash where key = 'a';
+
+select * from db15_w_1key_hash order by key;
+
+update db15_w_1key_hash set key = 'x', val = 'y' where key = 'c';
+
+select * from db15_w_1key_hash order by key;
+
+update db15_w_1key_hash set val = 'z' where key = 'e';
+
+select * from db15_w_1key_hash order by key;
+
+update db15_w_1key_hash set key = 'w' where key = 'e';
 
 select * from db15_w_1key_hash order by key;
 
@@ -297,6 +313,8 @@ insert into db15_w_1key_list values ('b'), ('d'),('f'),('a'); -- dups allowed he
 
 select * from db15_w_1key_list /* order by val */;
 
+update db15_w_1key_list set val = 'y';
+
 -- singleton set
 
 create foreign table db15_w_1key_set(key text)
@@ -315,6 +333,10 @@ delete from db15_w_1key_set where key = 'c';
 
 select * from db15_w_1key_set order by key;
 
+update db15_w_1key_set set key = 'x' where key = 'e';
+
+select * from db15_w_1key_set order by key;
+
 -- singleton zset with scores
 
 create foreign table db15_w_1key_zset(key text, priority numeric)
@@ -323,7 +345,7 @@ create foreign table db15_w_1key_zset(key text, priority numeric)
 
 select * from db15_w_1key_zset;
 
-insert into db15_w_1key_zset values ('a',1), ('c',5),('e',-5);
+insert into db15_w_1key_zset values ('a',1), ('c',5),('e',-5), ('h',10);
 
 select * from db15_w_1key_zset order by priority;
 
@@ -337,8 +359,24 @@ delete from db15_w_1key_zset where priority = '5';
 
 select * from db15_w_1key_zset order by priority;
 
+update db15_w_1key_zset set key = 'x', priority = 99 where priority = '-5';
+
+select * from db15_w_1key_zset order by priority;
+
+update db15_w_1key_zset set key = 'y' where key = 'h';
+
+select * from db15_w_1key_zset order by priority;
+
+update db15_w_1key_zset set priority = 20 where key = 'y';
+
+select * from db15_w_1key_zset order by priority;
+
 -- singleton zset no scores
--- use set from last step, should have one row left
+-- use set from last step
+delete from db15_w_1key_zset;
+
+insert into db15_w_1key_zset values ('e',-5);
+
 create foreign table db15_w_1key_zsetx(key text)
        server localredis
        options (singleton_key 'w_1key_zset', tabletype 'zset', database '15');
@@ -347,7 +385,11 @@ select * from db15_w_1key_zsetx;
 
 insert into db15_w_1key_zsetx values ('a'), ('c'),('e'); -- can't insert
 
-delete from db15_w_1key_zsetx where key = 'e';
+update db15_w_1key_zsetx set key = 'z' where key = 'e';
+
+select * from db15_w_1key_zsetx order by key;
+
+delete from db15_w_1key_zsetx where key = 'z';
 
 select * from db15_w_1key_zsetx order by key;
 
@@ -364,6 +406,18 @@ insert into db15_w_scalar values ('a_ws','b'), ('c_ws','d'),('e_ws','f');
 select * from db15_w_scalar order by key;
 
 delete from db15_w_scalar where key = 'a_ws';
+
+select * from db15_w_scalar;
+
+update db15_w_scalar set key = 'x_ws', val='y' where key = 'e_ws';
+
+select * from db15_w_scalar;
+
+update db15_w_scalar set key = 'z_ws' where key = 'c_ws';
+
+select * from db15_w_scalar;
+
+update db15_w_scalar set val = 'z' where key = 'z_ws';
 
 select * from db15_w_scalar;
 
@@ -394,6 +448,21 @@ delete from db15_w_scalar_pfx where key = 'w_scalar_a';
 
 select * from db15_w_scalar_pfx;
 
+update db15_w_scalar_pfx set key = 'x', val = 'y' where key = 'w_scalar_c'; -- prefix err
+update db15_w_scalar_pfx set key = 'x'  where key = 'w_scalar_c'; -- prefix err
+
+update db15_w_scalar_pfx set key = 'w_scalar_x', val = 'y' where key = 'w_scalar_c';
+
+select * from db15_w_scalar_pfx;
+
+update db15_w_scalar_pfx set key = 'w_scalar_z' where key = 'w_scalar_x';
+
+select * from db15_w_scalar_pfx;
+
+update db15_w_scalar_pfx set val = 'w' where key = 'w_scalar_e';
+
+select * from db15_w_scalar_pfx;
+
 delete from db15_w_scalar_pfx;
 
 select * from db15_w_scalar_pfx;
@@ -413,6 +482,18 @@ insert into db15_w_scalar_kset values ('a_wsks','x'); -- dup error
 select * from db15_w_scalar_kset;
 
 delete from db15_w_scalar_kset where key = 'a_wsks';
+
+select * from db15_w_scalar_kset;
+
+update db15_w_scalar_kset set key = 'x_wsks', val = 'y' where key = 'c_wsks';
+
+select * from db15_w_scalar_kset;
+
+update db15_w_scalar_kset set key = 'z_wsks' where key = 'x_wsks';
+
+select * from db15_w_scalar_kset;
+
+update db15_w_scalar_kset set val = 'w' where key = 'e_wsks';
 
 select * from db15_w_scalar_kset;
 
@@ -472,6 +553,21 @@ delete from db15_w_set_pfx where key = 'w_set_a';
 
 select key, atsort(val) as val from db15_w_set_pfx order by key;
 
+update db15_w_set_pfx set key = 'x' where key = 'w_set_c'; -- prefix err
+update db15_w_set_pfx set key = 'x', val = '{y}' where key = 'w_set_c'; -- prefix err
+
+update db15_w_set_pfx set key = 'w_set_x', val = '{x,y,z}' where key = 'w_set_c';
+
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+
+update db15_w_set_pfx set key = 'w_set_z' where key = 'w_set_x';
+
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+
+update db15_w_set_pfx set val = '{q,r,s}' where key = 'w_set_e';
+
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+
 delete from db15_w_set_pfx;
 
 select key, atsort(val) as val from db15_w_set_pfx order by key;
@@ -492,6 +588,18 @@ insert into db15_w_set_kset values ('a_wsk','{x}'); -- dup error
 select key, atsort(val) as val from db15_w_set_kset order by key;
 
 delete from db15_w_set_kset where key = 'a_wsk';
+
+select key, atsort(val) as val from db15_w_set_kset order by key;
+
+update db15_w_set_kset set key = 'x_wsk', val = '{x,y,z}' where key = 'c_wsk';
+
+select key, atsort(val) as val from db15_w_set_kset order by key;
+
+update db15_w_set_kset set key = 'z_wsk' where key = 'x_wsk';
+
+select key, atsort(val) as val from db15_w_set_kset order by key;
+
+update db15_w_set_kset set val = '{q,r,s}' where key = 'e_wsk';
 
 select key, atsort(val) as val from db15_w_set_kset order by key;
 
@@ -520,6 +628,21 @@ delete from db15_w_list_pfx where key = 'w_list_a';
 
 select * from db15_w_list_pfx order by key;
 
+update db15_w_list_pfx set key = 'x' where key = 'w_list_c'; -- prefix err
+update db15_w_list_pfx set key = 'x', val = '{y}' where key = 'w_list_c'; -- prefix err
+
+update db15_w_list_pfx set key = 'w_list_x', val = '{x,y,z}' where key = 'w_list_c';
+
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+
+update db15_w_list_pfx set key = 'w_list_z' where key = 'w_list_x';
+
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+
+update db15_w_list_pfx set val = '{q,r,s}' where key = 'w_list_e';
+
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+
 delete from db15_w_list_pfx;
 
 select * from db15_w_list_pfx;
@@ -541,6 +664,18 @@ select * from db15_w_list_kset order by key;
 delete from db15_w_list_kset where key = 'a_wlk';
 
 select * from db15_w_list_kset order by key;
+
+update db15_w_list_kset set key = 'x_wlk', val = '{x,y,z}' where key = 'c_wlk';
+
+select key, atsort(val) as val from db15_w_list_kset order by key;
+
+update db15_w_list_kset set key = 'z_wlk' where key = 'x_wlk';
+
+select key, atsort(val) as val from db15_w_list_kset order by key;
+
+update db15_w_list_kset set val = '{q,r,s}' where key = 'e_wlk';
+
+select key, atsort(val) as val from db15_w_list_kset order by key;
 
 delete from db15_w_list_kset;
 
@@ -568,6 +703,21 @@ delete from db15_w_zset_pfx where key = 'w_zset_a';
 
 select * from db15_w_zset_pfx order by key;
 
+update db15_w_zset_pfx set key = 'x' where key = 'w_zset_c'; -- prefix err
+update db15_w_zset_pfx set key = 'x', val = '{y}' where key = 'w_zset_c'; -- prefix err
+
+update db15_w_zset_pfx set key = 'w_zset_x', val = '{x,y,z}' where key = 'w_zset_c';
+
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+
+update db15_w_zset_pfx set key = 'w_zset_z' where key = 'w_zset_x';
+
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+
+update db15_w_zset_pfx set val = '{q,r,s}' where key = 'w_zset_e';
+
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+
 delete from db15_w_zset_pfx;
 
 select * from db15_w_zset_pfx;
@@ -590,10 +740,104 @@ delete from db15_w_zset_kset where key = 'a_wzk';
 
 select * from db15_w_zset_kset order by key;
 
+update db15_w_zset_kset set key = 'x_wlk', val = '{x,y,z}' where key = 'c_wzk';
+
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+
+update db15_w_zset_kset set key = 'z_wzk' where key = 'x_wzk';
+
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+
+update db15_w_zset_kset set val = '{q,r,s}' where key = 'e_wzk';
+
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+
 delete from db15_w_zset_kset;
 
 select * from db15_w_zset_kset;
 
+-- non-singleton hash table prefix
+
+create foreign table db15_w_hash_pfx(key text, val text[])
+       server localredis
+       options (database '15', tabletype 'hash', tablekeyprefix 'w_hash_');
+
+select * from db15_w_hash_pfx;
+
+insert into db15_w_hash_pfx values ('w_hash_e','{f,g,h}'); -- error
+
+insert into db15_w_hash_pfx values ('w_hash_e','{}'); -- error
+
+insert into db15_w_hash_pfx values ('w_hash_a','{b,c,d,e}'), ('w_hash_c','{f,g,h,i}'),('w_hash_e','{j,k}');
+
+insert into db15_w_hash_pfx values ('x','{y,z}'); -- prefix error
+
+insert into db15_w_hash_pfx values ('w_hash_a','{y,z}'); -- dup error
+
+select * from db15_w_hash_pfx order by key;
+
+delete from db15_w_hash_pfx where key = 'w_hash_a';
+
+select * from db15_w_hash_pfx order by key;
+
+update db15_w_hash_pfx set key = 'x' where key = 'w_hash_c'; -- prefix err
+update db15_w_hash_pfx set key = 'x', val = '{y,z}' where key = 'w_hash_c'; -- prefix err
+
+update db15_w_hash_pfx set key = 'w_hash_x', val = '{x,y,z}' where key = 'w_hash_c'; -- err
+
+update db15_w_hash_pfx set key = 'w_hash_x', val = '{w,x,y,z}' where key = 'w_hash_c';
+
+select key, val from db15_w_hash_pfx order by key;
+
+update db15_w_hash_pfx set key = 'w_hash_z' where key = 'w_hash_x';
+
+select key, val from db15_w_hash_pfx order by key;
+
+update db15_w_hash_pfx set val = '{q,r,s}' where key = 'w_hash_e';
+
+select key, val from db15_w_hash_pfx order by key;
+
+delete from db15_w_hash_pfx;
+
+select * from db15_w_hash_pfx;
+
+--non-singleton hash table keyset
+
+create foreign table db15_w_hash_kset(key text, val text[])
+       server localredis
+       options (database '15', tabletype 'hash', tablekeyset 'w_hash_kset');
+
+select * from db15_w_hash_kset;
+
+insert into db15_w_hash_pfx values ('e_whk','{f,g,h}'); -- error
+
+insert into db15_w_hash_pfx values ('e_whk','{}'); -- error
+
+insert into db15_w_hash_kset values ('a_whk','{b,c,d,e}'), ('c_whk','{f,g,h,i}'),('e_whk','{j,k}');
+
+insert into db15_w_hash_kset values ('a_whk','{x,y}'); -- dup error
+
+select * from db15_w_hash_kset order by key;
+
+delete from db15_w_hash_kset where key = 'a_whk';
+
+select * from db15_w_hash_kset order by key;
+
+update db15_w_hash_kset set key = 'x_whk', val = '{w,x,y,z}' where key = 'c_whk';
+
+select key, val from db15_w_hash_kset order by key;
+
+update db15_w_hash_kset set key = 'z_whk' where key = 'x_whk';
+
+select key, val from db15_w_hash_kset order by key;
+
+update db15_w_hash_kset set val = '{q,r}' where key = 'e_whk';
+
+select key, val from db15_w_hash_kset order by key;
+
+delete from db15_w_hash_kset;
+
+select * from db15_w_hash_kset;
 
 -- all done, so now blow everything in the db away again
 

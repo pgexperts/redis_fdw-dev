@@ -406,6 +406,13 @@ select * from db15_w_1key_scalar;
  only row
 (1 row)
 
+update db15_w_1key_scalar set val = 'new scalar val';
+select * from db15_w_1key_scalar;
+      val       
+----------------
+ new scalar val
+(1 row)
+
 delete from db15_w_1key_scalar;
 select * from db15_w_1key_scalar;
  val 
@@ -439,6 +446,30 @@ select * from db15_w_1key_hash order by key;
 -----+-----
  c   | d
  e   | f
+(2 rows)
+
+update db15_w_1key_hash set key = 'x', val = 'y' where key = 'c';
+select * from db15_w_1key_hash order by key;
+ key | val 
+-----+-----
+ e   | f
+ x   | y
+(2 rows)
+
+update db15_w_1key_hash set val = 'z' where key = 'e';
+select * from db15_w_1key_hash order by key;
+ key | val 
+-----+-----
+ e   | z
+ x   | y
+(2 rows)
+
+update db15_w_1key_hash set key = 'w' where key = 'e';
+select * from db15_w_1key_hash order by key;
+ key | val 
+-----+-----
+ w   | z
+ x   | y
 (2 rows)
 
 -- singleton list
@@ -477,6 +508,8 @@ select * from db15_w_1key_list /* order by val */;
  a
 (7 rows)
 
+update db15_w_1key_list set val = 'y';
+ERROR:  update not supported for this type of table
 -- singleton set
 create foreign table db15_w_1key_set(key text)
        server localredis
@@ -505,6 +538,14 @@ select * from db15_w_1key_set order by key;
  e
 (2 rows)
 
+update db15_w_1key_set set key = 'x' where key = 'e';
+select * from db15_w_1key_set order by key;
+ key 
+-----
+ a
+ x
+(2 rows)
+
 -- singleton zset with scores
 create foreign table db15_w_1key_zset(key text, priority numeric)
        server localredis
@@ -514,14 +555,15 @@ select * from db15_w_1key_zset;
 -----+----------
 (0 rows)
 
-insert into db15_w_1key_zset values ('a',1), ('c',5),('e',-5);
+insert into db15_w_1key_zset values ('a',1), ('c',5),('e',-5), ('h',10);
 select * from db15_w_1key_zset order by priority;
  key | priority 
 -----+----------
  e   |       -5
  a   |        1
  c   |        5
-(3 rows)
+ h   |       10
+(4 rows)
 
 insert into db15_w_1key_zset values ('a',99);
 ERROR:  key already exists: a
@@ -531,17 +573,45 @@ select * from db15_w_1key_zset order by priority;
 -----+----------
  e   |       -5
  c   |        5
-(2 rows)
+ h   |       10
+(3 rows)
 
 delete from db15_w_1key_zset where priority = '5';
 select * from db15_w_1key_zset order by priority;
  key | priority 
 -----+----------
  e   |       -5
-(1 row)
+ h   |       10
+(2 rows)
+
+update db15_w_1key_zset set key = 'x', priority = 99 where priority = '-5';
+select * from db15_w_1key_zset order by priority;
+ key | priority 
+-----+----------
+ h   |       10
+ x   |       99
+(2 rows)
+
+update db15_w_1key_zset set key = 'y' where key = 'h';
+select * from db15_w_1key_zset order by priority;
+ key | priority 
+-----+----------
+ y   |       10
+ x   |       99
+(2 rows)
+
+update db15_w_1key_zset set priority = 20 where key = 'y';
+select * from db15_w_1key_zset order by priority;
+ key | priority 
+-----+----------
+ y   |       20
+ x   |       99
+(2 rows)
 
 -- singleton zset no scores
--- use set from last step, should have one row left
+-- use set from last step
+delete from db15_w_1key_zset;
+insert into db15_w_1key_zset values ('e',-5);
 create foreign table db15_w_1key_zsetx(key text)
        server localredis
        options (singleton_key 'w_1key_zset', tabletype 'zset', database '15');
@@ -553,7 +623,14 @@ select * from db15_w_1key_zsetx;
 
 insert into db15_w_1key_zsetx values ('a'), ('c'),('e'); -- can't insert
 ERROR:  operation not supported for singleton zset table without priorities column
-delete from db15_w_1key_zsetx where key = 'e';
+update db15_w_1key_zsetx set key = 'z' where key = 'e';
+select * from db15_w_1key_zsetx order by key;
+ key 
+-----
+ z
+(1 row)
+
+delete from db15_w_1key_zsetx where key = 'z';
 select * from db15_w_1key_zsetx order by key;
  key 
 -----
@@ -583,6 +660,30 @@ select * from db15_w_scalar;
 ------+-----
  e_ws | f
  c_ws | d
+(2 rows)
+
+update db15_w_scalar set key = 'x_ws', val='y' where key = 'e_ws';
+select * from db15_w_scalar;
+ key  | val 
+------+-----
+ c_ws | d
+ x_ws | y
+(2 rows)
+
+update db15_w_scalar set key = 'z_ws' where key = 'c_ws';
+select * from db15_w_scalar;
+ key  | val 
+------+-----
+ z_ws | d
+ x_ws | y
+(2 rows)
+
+update db15_w_scalar set val = 'z' where key = 'z_ws';
+select * from db15_w_scalar;
+ key  | val 
+------+-----
+ z_ws | z
+ x_ws | y
 (2 rows)
 
 /*
@@ -621,6 +722,34 @@ select * from db15_w_scalar_pfx;
  w_scalar_c | d
 (2 rows)
 
+update db15_w_scalar_pfx set key = 'x', val = 'y' where key = 'w_scalar_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_scalar_pfx set key = 'x'  where key = 'w_scalar_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_scalar_pfx set key = 'w_scalar_x', val = 'y' where key = 'w_scalar_c';
+select * from db15_w_scalar_pfx;
+    key     | val 
+------------+-----
+ w_scalar_e | f
+ w_scalar_x | y
+(2 rows)
+
+update db15_w_scalar_pfx set key = 'w_scalar_z' where key = 'w_scalar_x';
+select * from db15_w_scalar_pfx;
+    key     | val 
+------------+-----
+ w_scalar_e | f
+ w_scalar_z | y
+(2 rows)
+
+update db15_w_scalar_pfx set val = 'w' where key = 'w_scalar_e';
+select * from db15_w_scalar_pfx;
+    key     | val 
+------------+-----
+ w_scalar_e | w
+ w_scalar_z | y
+(2 rows)
+
 delete from db15_w_scalar_pfx;
 select * from db15_w_scalar_pfx;
  key | val 
@@ -653,6 +782,30 @@ select * from db15_w_scalar_kset;
 --------+-----
  e_wsks | f
  c_wsks | d
+(2 rows)
+
+update db15_w_scalar_kset set key = 'x_wsks', val = 'y' where key = 'c_wsks';
+select * from db15_w_scalar_kset;
+  key   | val 
+--------+-----
+ e_wsks | f
+ x_wsks | y
+(2 rows)
+
+update db15_w_scalar_kset set key = 'z_wsks' where key = 'x_wsks';
+select * from db15_w_scalar_kset;
+  key   | val 
+--------+-----
+ z_wsks | y
+ e_wsks | f
+(2 rows)
+
+update db15_w_scalar_kset set val = 'w' where key = 'e_wsks';
+select * from db15_w_scalar_kset;
+  key   | val 
+--------+-----
+ z_wsks | y
+ e_wsks | w
 (2 rows)
 
 delete from db15_w_scalar_kset;
@@ -719,6 +872,34 @@ select key, atsort(val) as val from db15_w_set_pfx order by key;
  w_set_e | {f,g,h}
 (2 rows)
 
+update db15_w_set_pfx set key = 'x' where key = 'w_set_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_set_pfx set key = 'x', val = '{y}' where key = 'w_set_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_set_pfx set key = 'w_set_x', val = '{x,y,z}' where key = 'w_set_c';
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+   key   |   val   
+---------+---------
+ w_set_e | {f,g,h}
+ w_set_x | {x,y,z}
+(2 rows)
+
+update db15_w_set_pfx set key = 'w_set_z' where key = 'w_set_x';
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+   key   |   val   
+---------+---------
+ w_set_e | {f,g,h}
+ w_set_z | {x,y,z}
+(2 rows)
+
+update db15_w_set_pfx set val = '{q,r,s}' where key = 'w_set_e';
+select key, atsort(val) as val from db15_w_set_pfx order by key;
+   key   |   val   
+---------+---------
+ w_set_e | {q,r,s}
+ w_set_z | {x,y,z}
+(2 rows)
+
 delete from db15_w_set_pfx;
 select key, atsort(val) as val from db15_w_set_pfx order by key;
  key | val 
@@ -751,6 +932,30 @@ select key, atsort(val) as val from db15_w_set_kset order by key;
 -------+---------
  c_wsk | {d,e,f}
  e_wsk | {f,g,h}
+(2 rows)
+
+update db15_w_set_kset set key = 'x_wsk', val = '{x,y,z}' where key = 'c_wsk';
+select key, atsort(val) as val from db15_w_set_kset order by key;
+  key  |   val   
+-------+---------
+ e_wsk | {f,g,h}
+ x_wsk | {x,y,z}
+(2 rows)
+
+update db15_w_set_kset set key = 'z_wsk' where key = 'x_wsk';
+select key, atsort(val) as val from db15_w_set_kset order by key;
+  key  |   val   
+-------+---------
+ e_wsk | {f,g,h}
+ z_wsk | {x,y,z}
+(2 rows)
+
+update db15_w_set_kset set val = '{q,r,s}' where key = 'e_wsk';
+select key, atsort(val) as val from db15_w_set_kset order by key;
+  key  |   val   
+-------+---------
+ e_wsk | {q,r,s}
+ z_wsk | {x,y,z}
 (2 rows)
 
 delete from db15_w_set_kset;
@@ -789,6 +994,34 @@ select * from db15_w_list_pfx order by key;
  w_list_e | {f,g,h}
 (2 rows)
 
+update db15_w_list_pfx set key = 'x' where key = 'w_list_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_list_pfx set key = 'x', val = '{y}' where key = 'w_list_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_list_pfx set key = 'w_list_x', val = '{x,y,z}' where key = 'w_list_c';
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+   key    |   val   
+----------+---------
+ w_list_e | {f,g,h}
+ w_list_x | {x,y,z}
+(2 rows)
+
+update db15_w_list_pfx set key = 'w_list_z' where key = 'w_list_x';
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+   key    |   val   
+----------+---------
+ w_list_e | {f,g,h}
+ w_list_z | {x,y,z}
+(2 rows)
+
+update db15_w_list_pfx set val = '{q,r,s}' where key = 'w_list_e';
+select key, atsort(val) as val from db15_w_list_pfx order by key;
+   key    |   val   
+----------+---------
+ w_list_e | {q,r,s}
+ w_list_z | {x,y,z}
+(2 rows)
+
 delete from db15_w_list_pfx;
 select * from db15_w_list_pfx;
  key | val 
@@ -821,6 +1054,30 @@ select * from db15_w_list_kset order by key;
 -------+---------
  c_wlk | {d,e,f}
  e_wlk | {f,g,h}
+(2 rows)
+
+update db15_w_list_kset set key = 'x_wlk', val = '{x,y,z}' where key = 'c_wlk';
+select key, atsort(val) as val from db15_w_list_kset order by key;
+  key  |   val   
+-------+---------
+ e_wlk | {f,g,h}
+ x_wlk | {x,y,z}
+(2 rows)
+
+update db15_w_list_kset set key = 'z_wlk' where key = 'x_wlk';
+select key, atsort(val) as val from db15_w_list_kset order by key;
+  key  |   val   
+-------+---------
+ e_wlk | {f,g,h}
+ z_wlk | {x,y,z}
+(2 rows)
+
+update db15_w_list_kset set val = '{q,r,s}' where key = 'e_wlk';
+select key, atsort(val) as val from db15_w_list_kset order by key;
+  key  |   val   
+-------+---------
+ e_wlk | {q,r,s}
+ z_wlk | {x,y,z}
 (2 rows)
 
 delete from db15_w_list_kset;
@@ -859,6 +1116,34 @@ select * from db15_w_zset_pfx order by key;
  w_zset_e | {f,g,h}
 (2 rows)
 
+update db15_w_zset_pfx set key = 'x' where key = 'w_zset_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_zset_pfx set key = 'x', val = '{y}' where key = 'w_zset_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_zset_pfx set key = 'w_zset_x', val = '{x,y,z}' where key = 'w_zset_c';
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+   key    |      val      
+----------+---------------
+ w_zset_e | {f,g,h}
+ w_zset_x | {d,e,f,x,y,z}
+(2 rows)
+
+update db15_w_zset_pfx set key = 'w_zset_z' where key = 'w_zset_x';
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+   key    |      val      
+----------+---------------
+ w_zset_e | {f,g,h}
+ w_zset_z | {d,e,f,x,y,z}
+(2 rows)
+
+update db15_w_zset_pfx set val = '{q,r,s}' where key = 'w_zset_e';
+select key, atsort(val) as val from db15_w_zset_pfx order by key;
+   key    |      val      
+----------+---------------
+ w_zset_e | {f,g,h,q,r,s}
+ w_zset_z | {d,e,f,x,y,z}
+(2 rows)
+
 delete from db15_w_zset_pfx;
 select * from db15_w_zset_pfx;
  key | val 
@@ -893,8 +1178,165 @@ select * from db15_w_zset_kset order by key;
  e_wzk | {f,g,h}
 (2 rows)
 
+update db15_w_zset_kset set key = 'x_wlk', val = '{x,y,z}' where key = 'c_wzk';
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+  key  |      val      
+-------+---------------
+ e_wzk | {f,g,h}
+ x_wlk | {d,e,f,x,y,z}
+(2 rows)
+
+update db15_w_zset_kset set key = 'z_wzk' where key = 'x_wzk';
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+  key  |      val      
+-------+---------------
+ e_wzk | {f,g,h}
+ x_wlk | {d,e,f,x,y,z}
+(2 rows)
+
+update db15_w_zset_kset set val = '{q,r,s}' where key = 'e_wzk';
+select key, atsort(val) as val from db15_w_zset_kset order by key;
+  key  |      val      
+-------+---------------
+ e_wzk | {f,g,h,q,r,s}
+ x_wlk | {d,e,f,x,y,z}
+(2 rows)
+
 delete from db15_w_zset_kset;
 select * from db15_w_zset_kset;
+ key | val 
+-----+-----
+(0 rows)
+
+-- non-singleton hash table prefix
+create foreign table db15_w_hash_pfx(key text, val text[])
+       server localredis
+       options (database '15', tabletype 'hash', tablekeyprefix 'w_hash_');
+select * from db15_w_hash_pfx;
+ key | val 
+-----+-----
+(0 rows)
+
+insert into db15_w_hash_pfx values ('w_hash_e','{f,g,h}'); -- error
+ERROR:  cannot decompose odd number of items into a Redis hash
+insert into db15_w_hash_pfx values ('w_hash_e','{}'); -- error
+ERROR:  cannot store empty list in a Redis table
+insert into db15_w_hash_pfx values ('w_hash_a','{b,c,d,e}'), ('w_hash_c','{f,g,h,i}'),('w_hash_e','{j,k}');
+insert into db15_w_hash_pfx values ('x','{y,z}'); -- prefix error
+ERROR:  key 'x' does not match table key prefix 'w_hash_'
+insert into db15_w_hash_pfx values ('w_hash_a','{y,z}'); -- dup error
+ERROR:  key already exists: w_hash_a
+select * from db15_w_hash_pfx order by key;
+   key    |    val    
+----------+-----------
+ w_hash_a | {b,c,d,e}
+ w_hash_c | {f,g,h,i}
+ w_hash_e | {j,k}
+(3 rows)
+
+delete from db15_w_hash_pfx where key = 'w_hash_a';
+select * from db15_w_hash_pfx order by key;
+   key    |    val    
+----------+-----------
+ w_hash_c | {f,g,h,i}
+ w_hash_e | {j,k}
+(2 rows)
+
+update db15_w_hash_pfx set key = 'x' where key = 'w_hash_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_hash_pfx set key = 'x', val = '{y,z}' where key = 'w_hash_c'; -- prefix err
+ERROR:  key prefix condition violation: x
+update db15_w_hash_pfx set key = 'w_hash_x', val = '{x,y,z}' where key = 'w_hash_c'; -- err
+ERROR:  cannot decompose odd number of items into a Redis hash
+update db15_w_hash_pfx set key = 'w_hash_x', val = '{w,x,y,z}' where key = 'w_hash_c';
+select key, val from db15_w_hash_pfx order by key;
+   key    |    val    
+----------+-----------
+ w_hash_e | {j,k}
+ w_hash_x | {w,x,y,z}
+(2 rows)
+
+update db15_w_hash_pfx set key = 'w_hash_z' where key = 'w_hash_x';
+select key, val from db15_w_hash_pfx order by key;
+   key    |    val    
+----------+-----------
+ w_hash_e | {j,k}
+ w_hash_z | {w,x,y,z}
+(2 rows)
+
+update db15_w_hash_pfx set val = '{q,r,s}' where key = 'w_hash_e';
+ERROR:  cannot decompose odd number of items into a Redis hash
+select key, val from db15_w_hash_pfx order by key;
+   key    |    val    
+----------+-----------
+ w_hash_e | {j,k}
+ w_hash_z | {w,x,y,z}
+(2 rows)
+
+delete from db15_w_hash_pfx;
+select * from db15_w_hash_pfx;
+ key | val 
+-----+-----
+(0 rows)
+
+--non-singleton hash table keyset
+create foreign table db15_w_hash_kset(key text, val text[])
+       server localredis
+       options (database '15', tabletype 'hash', tablekeyset 'w_hash_kset');
+select * from db15_w_hash_kset;
+ key | val 
+-----+-----
+(0 rows)
+
+insert into db15_w_hash_pfx values ('e_whk','{f,g,h}'); -- error
+ERROR:  key 'e_whk' does not match table key prefix 'w_hash_'
+insert into db15_w_hash_pfx values ('e_whk','{}'); -- error
+ERROR:  key 'e_whk' does not match table key prefix 'w_hash_'
+insert into db15_w_hash_kset values ('a_whk','{b,c,d,e}'), ('c_whk','{f,g,h,i}'),('e_whk','{j,k}');
+insert into db15_w_hash_kset values ('a_whk','{x,y}'); -- dup error
+ERROR:  key already exists: a_whk
+select * from db15_w_hash_kset order by key;
+  key  |    val    
+-------+-----------
+ a_whk | {b,c,d,e}
+ c_whk | {f,g,h,i}
+ e_whk | {j,k}
+(3 rows)
+
+delete from db15_w_hash_kset where key = 'a_whk';
+select * from db15_w_hash_kset order by key;
+  key  |    val    
+-------+-----------
+ c_whk | {f,g,h,i}
+ e_whk | {j,k}
+(2 rows)
+
+update db15_w_hash_kset set key = 'x_whk', val = '{w,x,y,z}' where key = 'c_whk';
+select key, val from db15_w_hash_kset order by key;
+  key  |    val    
+-------+-----------
+ e_whk | {j,k}
+ x_whk | {w,x,y,z}
+(2 rows)
+
+update db15_w_hash_kset set key = 'z_whk' where key = 'x_whk';
+select key, val from db15_w_hash_kset order by key;
+  key  |    val    
+-------+-----------
+ e_whk | {j,k}
+ z_whk | {w,x,y,z}
+(2 rows)
+
+update db15_w_hash_kset set val = '{q,r}' where key = 'e_whk';
+select key, val from db15_w_hash_kset order by key;
+  key  |    val    
+-------+-----------
+ e_whk | {q,r}
+ z_whk | {w,x,y,z}
+(2 rows)
+
+delete from db15_w_hash_kset;
+select * from db15_w_hash_kset;
  key | val 
 -----+-----
 (0 rows)
