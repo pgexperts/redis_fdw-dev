@@ -461,9 +461,9 @@ select * from db15_w_1key_list /* order by val */ ;
 (3 rows)
 
 delete from db15_w_1key_list where val = 'a';
-ERROR:  update not supported for this type of table
+ERROR:  delete not supported for this type of table
 delete from db15_w_1key_list where val = 'z';
-ERROR:  update not supported for this type of table
+ERROR:  delete not supported for this type of table
 insert into db15_w_1key_list values ('b'), ('d'),('f'),('a'); -- dups allowed here
 select * from db15_w_1key_list /* order by val */;
  val 
