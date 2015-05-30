@@ -461,8 +461,9 @@ select * from db15_w_1key_list /* order by val */ ;
 (3 rows)
 
 delete from db15_w_1key_list where val = 'a';
-ERROR:  cannot delete from a List type Singleton Key Redis table
+ERROR:  update not supported for this type of table
 delete from db15_w_1key_list where val = 'z';
+ERROR:  update not supported for this type of table
 insert into db15_w_1key_list values ('b'), ('d'),('f'),('a'); -- dups allowed here
 select * from db15_w_1key_list /* order by val */;
  val 
@@ -845,17 +846,17 @@ ERROR:  key already exists: w_zset_a
 select * from db15_w_zset_pfx order by key;
    key    |   val   
 ----------+---------
- w_zset_a | {b,d,c}
- w_zset_c | {d,f,e}
- w_zset_e | {f,h,g}
+ w_zset_a | {b,c,d}
+ w_zset_c | {d,e,f}
+ w_zset_e | {f,g,h}
 (3 rows)
 
 delete from db15_w_zset_pfx where key = 'w_zset_a';
 select * from db15_w_zset_pfx order by key;
    key    |   val   
 ----------+---------
- w_zset_c | {d,f,e}
- w_zset_e | {f,h,g}
+ w_zset_c | {d,e,f}
+ w_zset_e | {f,g,h}
 (2 rows)
 
 delete from db15_w_zset_pfx;
@@ -879,17 +880,17 @@ ERROR:  key already exists: a_wzk
 select * from db15_w_zset_kset order by key;
   key  |   val   
 -------+---------
- a_wzk | {b,d,c}
- c_wzk | {d,f,e}
- e_wzk | {f,h,g}
+ a_wzk | {b,c,d}
+ c_wzk | {d,e,f}
+ e_wzk | {f,g,h}
 (3 rows)
 
 delete from db15_w_zset_kset where key = 'a_wzk';
 select * from db15_w_zset_kset order by key;
   key  |   val   
 -------+---------
- c_wzk | {d,f,e}
- e_wzk | {f,h,g}
+ c_wzk | {d,e,f}
+ e_wzk | {f,g,h}
 (2 rows)
 
 delete from db15_w_zset_kset;
