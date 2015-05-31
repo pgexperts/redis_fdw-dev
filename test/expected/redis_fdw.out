@@ -1122,26 +1122,26 @@ update db15_w_zset_pfx set key = 'x', val = '{y}' where key = 'w_zset_c'; -- pre
 ERROR:  key prefix condition violation: x
 update db15_w_zset_pfx set key = 'w_zset_x', val = '{x,y,z}' where key = 'w_zset_c';
 select key, atsort(val) as val from db15_w_zset_pfx order by key;
-   key    |      val      
-----------+---------------
+   key    |   val   
+----------+---------
  w_zset_e | {f,g,h}
- w_zset_x | {d,e,f,x,y,z}
+ w_zset_x | {x,y,z}
 (2 rows)
 
 update db15_w_zset_pfx set key = 'w_zset_z' where key = 'w_zset_x';
 select key, atsort(val) as val from db15_w_zset_pfx order by key;
-   key    |      val      
-----------+---------------
+   key    |   val   
+----------+---------
  w_zset_e | {f,g,h}
- w_zset_z | {d,e,f,x,y,z}
+ w_zset_z | {x,y,z}
 (2 rows)
 
 update db15_w_zset_pfx set val = '{q,r,s}' where key = 'w_zset_e';
 select key, atsort(val) as val from db15_w_zset_pfx order by key;
-   key    |      val      
-----------+---------------
- w_zset_e | {f,g,h,q,r,s}
- w_zset_z | {d,e,f,x,y,z}
+   key    |   val   
+----------+---------
+ w_zset_e | {q,r,s}
+ w_zset_z | {x,y,z}
 (2 rows)
 
 delete from db15_w_zset_pfx;
@@ -1180,26 +1180,26 @@ select * from db15_w_zset_kset order by key;
 
 update db15_w_zset_kset set key = 'x_wlk', val = '{x,y,z}' where key = 'c_wzk';
 select key, atsort(val) as val from db15_w_zset_kset order by key;
-  key  |      val      
--------+---------------
+  key  |   val   
+-------+---------
  e_wzk | {f,g,h}
- x_wlk | {d,e,f,x,y,z}
+ x_wlk | {x,y,z}
 (2 rows)
 
 update db15_w_zset_kset set key = 'z_wzk' where key = 'x_wzk';
 select key, atsort(val) as val from db15_w_zset_kset order by key;
-  key  |      val      
--------+---------------
+  key  |   val   
+-------+---------
  e_wzk | {f,g,h}
- x_wlk | {d,e,f,x,y,z}
+ x_wlk | {x,y,z}
 (2 rows)
 
 update db15_w_zset_kset set val = '{q,r,s}' where key = 'e_wzk';
 select key, atsort(val) as val from db15_w_zset_kset order by key;
-  key  |      val      
--------+---------------
- e_wzk | {f,g,h,q,r,s}
- x_wlk | {d,e,f,x,y,z}
+  key  |   val   
+-------+---------
+ e_wzk | {q,r,s}
+ x_wlk | {x,y,z}
 (2 rows)
 
 delete from db15_w_zset_kset;

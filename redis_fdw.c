@@ -1693,6 +1693,10 @@ redisAddForeignUpdateTargets(Query *parsetree,
 	Form_pg_attribute attr =
 				RelationGetDescr(target_relation)->attrs[0];
 
+#ifdef DEBUG
+	elog(NOTICE, "redisAddForeignUpdateTargets");
+#endif
+
     /*
      * Code adapted from  postgres_fdw
 	 *
@@ -1735,6 +1739,10 @@ redisPlanForeignModify(PlannerInfo *root,
 	List           *array_elem_list = NIL;
 	TupleDesc	    tupdesc;
 	Oid             array_element_type = InvalidOid;
+
+#ifdef DEBUG
+	elog(NOTICE, "redisPlanForeignModify");
+#endif
 
 	/*
 	 * RETURNING list not supported
@@ -1817,7 +1825,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	List               *array_elem_list;
 
 #ifdef DEBUG
-	elog(NOTICE, "BeginForeignModify");
+	elog(NOTICE, "redisBeginForeignModify");
 #endif
 
 	table_options.address = NULL;
@@ -2073,6 +2081,10 @@ redisExecForeignInsert(EState *estate,
 	char *keyval;
 	char *extraval = ""; /* hash value or zset priority */
 	
+#ifdef DEBUG
+	elog(NOTICE, "redisExecForeignInsert");
+#endif
+
 	key = slot_getattr(slot, 1, &isnull);
 	keyval = OutputFunctionCall(&fmstate->p_flinfo[0], key);
 	
@@ -2422,6 +2434,10 @@ redisExecForeignDelete(EState *estate,
 	Datum datum;
 	char *keyval;
 
+#ifdef DEBUG
+	elog(NOTICE, "redisExecForeignDelete");
+#endif
+
     /* Get the key that was passed up as a resjunk column */
     datum = ExecGetJunkAttribute(planSlot,
                                  fmstate->keyAttno,
@@ -2535,6 +2551,10 @@ redisExecForeignUpdate(EState *estate,
 	ListCell *lc = NULL;
 	int flslot = 1;
 	int         nitems = 0;
+
+#ifdef DEBUG
+	elog(NOTICE, "redisExecForeignUpdate");
+#endif
 
     /* Get the key that was passed up as a resjunk column */
     datum = ExecGetJunkAttribute(planSlot,
@@ -2743,6 +2763,8 @@ redisExecForeignUpdate(EState *estate,
 				ereply = redisCommand(context,"ZADD %s %s %s", fmstate->singleton_key, newval, keyval);
 			else if (fmstate->table_type == PG_REDIS_HASH_TABLE)
 				ereply = redisCommand(context,"HSET %s %s %s", fmstate->singleton_key, keyval, newval);
+			else
+				elog(ERROR,"impossible update"); /* should not happen */
 		}
 	}
 
@@ -2751,13 +2773,13 @@ redisExecForeignUpdate(EState *estate,
 
 		Assert(!fmstate->singleton_key);
 		
+		ereply = redisCommand(context, "DEL %s ", newkey);
+
 		switch(fmstate->table_type)
 		{
 			case PG_REDIS_SET_TABLE:
 				{
 					int i;
-					
-					ereply = redisCommand(context, "DEL %s ", newkey);
 					
 					for (i = 0; i < nitems; i++)
 					{
@@ -2772,8 +2794,6 @@ redisExecForeignUpdate(EState *estate,
 				{
 					int i;
 
-					ereply = redisCommand(context, "DEL %s ", newkey);
-					
 					for (i = 0; i < nitems; i++)
 					{
 						ereply = redisCommand(context, "RPUSH %s %s",
@@ -2788,8 +2808,6 @@ redisExecForeignUpdate(EState *estate,
 					int i;
 					char *hk, *hv;
 
-					ereply = redisCommand(context, "DEL %s ", newkey);
-					
 					for (i = 0; i < nitems; i+=2)
 					{
 						hk = array_vals[i];
